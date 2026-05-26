@@ -1,0 +1,42 @@
+{
+  "//": "Copy this to a project's root as `.orbit.json` to tell Orbit how to",
+  "//2": "read that project's coordination state. EVERY field is optional — omit anything",
+  "//3": "and Orbit uses its built-in defaults (shown below). Orbit only READS these",
+  "//4": "files; it never writes them, so a format change can at worst blank the COORD panel.",
+
+  "coordination": {
+    "leaseDir": ".claude/leases",
+    "leaseGlob": "*.lease.json",
+    "leaseFields": {
+      "resource": ["resource", "id", "path"],
+      "agent": ["agent", "owner", "holder"],
+      "intent": ["intent", "reason", "note"],
+      "acquired": ["acquired", "acquiredAt", "created"],
+      "heartbeat": ["heartbeat", "heartbeatAt", "updated", "acquired"]
+    },
+    "takeoversLog": ".claude/leases/takeovers.log",
+    "wipFile": "WIP.md",
+    "wipSection": "Active"
+  },
+
+  "logDirs": ["PlayLogs", "logs", "Logs"],
+
+  "//commands": "Quick buttons in the command bar; each opens a shell session running `run`.",
+  "commands": [
+    { "label": "Leases", "run": "pwsh -File tools/leases.ps1 list", "shell": "powershell" },
+    { "label": "Newest PlayLog", "run": "Get-Content (Get-ChildItem PlayLogs/*.log | Sort-Object LastWriteTime -desc)[0] -Tail 60 -Wait" }
+  ],
+
+  "//docs": "Exact always-on docs for the pinned-docs strip (overrides the default set).",
+  "docs": ["CLAUDE.md", "STATUS.md", "WIP.md", "ASSISTANT_RULES.md", "INITIATIVES.md", "DOCS.md"],
+
+  "//accent": "Hex color to color-code this project across its tabs/UI.",
+  "accent": "#9ece6a",
+
+  "//subprojects": "Monorepo members shown nested under this project (each a full project). Auto-detected from a *.code-workspace if omitted.",
+  "subprojects": [
+    { "name": "backend", "path": "app" },
+    { "name": "admin", "path": "backoffice.client" },
+    { "name": "client", "path": "mooniz.client" }
+  ]
+}
