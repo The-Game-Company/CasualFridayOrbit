@@ -74,26 +74,61 @@ ensure_node() {
 ensure_node
 
 # --- 2. Claude Code CLI ------------------------------------------------------
-# Orbit drives your logged-in `claude`; it must be installed (login is interactive).
+# Orbit drives your logged-in `claude`; install it if missing (login stays interactive).
+CLAUDE_LOCAL="$HOME/.local/bin"
+
+# Echo the path to a usable claude, searching PATH then the known install dirs.
+claude_bin() {
+  if have claude; then command -v claude; return 0; fi
+  local p
+  for p in "$CLAUDE_LOCAL/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do
+    [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+
+# Make ~/.local/bin (the native installer's target) usable now and in future terminals.
+ensure_claude_on_path() {
+  case ":$PATH:" in *":$CLAUDE_LOCAL:"*) ;; *) export PATH="$CLAUDE_LOCAL:$PATH" ;; esac
+  local rc="$HOME/.zshrc"
+  if [ -d "$CLAUDE_LOCAL" ] && ! grep -qsF '.local/bin' "$rc" 2>/dev/null; then
+    printf '\n# Added by Orbit setup so `claude` is on PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+    info "Added ~/.local/bin to your PATH (~/.zshrc) — open a new Terminal to pick it up."
+  fi
+}
+
 ensure_claude() {
-  if have claude; then ok "Claude Code present ($(claude --version 2>/dev/null | head -n1))"; return; fi
-  warn "Claude Code CLI not found — installing…"
+  local bin
+  if bin="$(claude_bin)"; then
+    ok "Claude Code already installed ($("$bin" --version 2>/dev/null | head -n1))"
+    ensure_claude_on_path
+    return
+  fi
+  warn "Claude Code not found — installing…"
   if have curl && curl -fsSL https://claude.ai/install.sh | bash; then
-    ok "Installed Claude Code (native installer)."
+    ok "Ran the native Claude installer."
   else
-    warn "Native installer unavailable/failed; falling back to npm…"
+    warn "Native installer failed; trying npm…"
     npm install -g @anthropic-ai/claude-code || true
   fi
-  export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-  have claude && ok "Claude Code installed ($(claude --version 2>/dev/null | head -n1))" \
-              || warn "Claude installed but not on PATH yet — open a new terminal."
+  ensure_claude_on_path
+  if bin="$(claude_bin)"; then
+    ok "Claude Code installed ($("$bin" --version 2>/dev/null | head -n1))"
+  else
+    warn "Could not install Claude Code automatically — install it later with:"
+    warn "    curl -fsSL https://claude.ai/install.sh | bash"
+  fi
 }
 ensure_claude
 
 # --- 3. dependencies + icons -------------------------------------------------
-info "Installing npm dependencies…"
-npm install
-ok "Dependencies installed."
+if [ -d node_modules ]; then
+  ok "Dependencies already installed."
+else
+  info "Installing npm dependencies…"
+  npm install
+  ok "Dependencies installed."
+fi
 [ -f resources/orbit.icns ] || { info "Generating app icons…"; node scripts/gen-icon.mjs; }
 
 # The dev Electron binary occasionally fails to download during `npm install`; fetch it.
@@ -154,10 +189,11 @@ case "$MODE" in
     install_to_applications
     echo
     bold "All set!"
-    if ! have claude || ! claude --version >/dev/null 2>&1; then
-      warn "Run 'claude' once in Terminal and sign in (no API key) before using Orbit."
-    else
+    if claude_bin >/dev/null 2>&1; then
       info "If you haven't yet, run 'claude' once in Terminal and sign in (no API key)."
+    else
+      warn "Claude Code isn't installed — Orbit needs it. Install with:"
+      warn "    curl -fsSL https://claude.ai/install.sh | bash"
     fi
     info "Orbit is in your Applications and Dock — opening it now…"
     open "/Applications/Orbit.app" 2>/dev/null || true
