@@ -233,6 +233,7 @@ src/
 scripts/
   setup-mac.sh          one-shot macOS setup (Node + Claude Code + deps + run/build)
   setup-windows.ps1     one-shot Windows setup (same)
+  launch-mac.sh         build, then run the built app (macOS counterpart of launch.cmd)
   gen-icon.mjs          generate orbit.ico / .png / .icns from code
 ```
 
