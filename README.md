@@ -34,15 +34,23 @@ Run your already-installed, already-logged-in `claude` behind a reactive, multi-
 > sign in with your subscription (no API key). The setup scripts below install it for you if
 > it's missing.
 
-### One-shot setup
+### macOS — easiest (no commands)
+
+After cloning, **double-click `Install Orbit (macOS).command`** in the project folder. It
+installs everything (Node, the Claude Code CLI, dependencies), builds Orbit, and puts it in
+your **Applications and Dock** — like any normal Mac app. Then open Terminal once, run
+`claude`, and sign in (no API key).
+
+### One-shot setup (from a terminal)
 
 Installs Node + the Claude Code CLI if missing, installs dependencies, then runs or builds.
 
 **macOS** (Apple Silicon or Intel):
 
 ```bash
-./scripts/setup-mac.sh          # set up, then launch dev
-./scripts/setup-mac.sh --dmg    # set up, then build a .dmg / .zip
+./scripts/setup-mac.sh --install   # build + install to /Applications & Dock (same as the double-click)
+./scripts/setup-mac.sh             # or just launch dev mode (hot reload)
+./scripts/setup-mac.sh --dmg       # or build a .dmg / .zip
 ```
 
 **Windows**:

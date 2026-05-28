@@ -1,0 +1,6 @@
+# Shell scripts and macOS .command launchers must stay LF, so they execute on
+# macOS/Linux even when the repo is checked out on Windows (a CR in the shebang
+# line breaks the interpreter, e.g. "env: bash\r: No such file or directory").
+*.sh       text eol=lf
+*.command  text eol=lf
+*.mjs      text eol=lf
