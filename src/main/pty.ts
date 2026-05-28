@@ -5,20 +5,46 @@ import * as pty from '@lydell/node-pty'
 import { writeInjectedSession, cleanupInjectedSession, type InjectedSession } from './settings-inject'
 import type { TermKind } from '../shared/events'
 
-/** Prefer PowerShell 7 (pwsh) if installed, else Windows PowerShell. */
-function resolvePwsh(): string {
+/** First entry on PATH that contains an executable named `name`, or null. */
+function findOnPath(name: string): string | null {
   const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
-  for (const name of ['pwsh.exe', 'powershell.exe']) {
-    for (const d of dirs) {
-      const full = path.join(d, name)
-      try {
-        if (fs.existsSync(full)) return full
-      } catch {
-        /* ignore */
-      }
+  for (const d of dirs) {
+    const full = path.join(d, name)
+    try {
+      if (fs.existsSync(full)) return full
+    } catch {
+      /* ignore */
     }
   }
-  return 'powershell.exe'
+  return null
+}
+
+/** Prefer PowerShell 7 (pwsh) if installed, else Windows PowerShell. */
+function resolvePwsh(): string {
+  return findOnPath('pwsh.exe') ?? findOnPath('powershell.exe') ?? 'powershell.exe'
+}
+
+/**
+ * Resolve a POSIX login shell. An explicit kind (zsh/bash) is honored when that shell is
+ * present; otherwise we use the user's $SHELL, falling back to zsh → bash → sh. This also
+ * catches Windows-only kinds (powershell/cmd) that get carried onto a Mac via a restored
+ * workspace — they land on the user's default shell rather than failing to spawn.
+ */
+function resolveUnixShell(kind: TermKind): string {
+  if (kind === 'bash') return findOnPath('bash') ?? '/bin/bash'
+  if (kind === 'zsh') return findOnPath('zsh') ?? '/bin/zsh'
+  return process.env.SHELL || findOnPath('zsh') || findOnPath('bash') || '/bin/sh'
+}
+
+/** File + args for a plain (non-claude) shell terminal, resolved for the host platform. */
+function resolveShell(kind: TermKind): { file: string; args: string[] } {
+  if (process.platform === 'win32') {
+    // cmd stays cmd; everything else (powershell, or a unix kind from a moved workspace) → PowerShell.
+    if (kind === 'cmd') return { file: process.env.ComSpec || 'cmd.exe', args: [] }
+    return { file: resolvePwsh(), args: ['-NoLogo'] }
+  }
+  // macOS / Linux: spawn a login shell so the user's PATH and profile are loaded.
+  return { file: resolveUnixShell(kind), args: ['-l'] }
 }
 
 /**
@@ -27,22 +53,19 @@ function resolvePwsh(): string {
  */
 export function resolveClaudePath(): string {
   const exe = process.platform === 'win32' ? 'claude.exe' : 'claude'
-  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
-  for (const d of dirs) {
-    const full = path.join(d, exe)
-    try {
-      if (fs.existsSync(full)) return full
-    } catch {
-      /* ignore */
-    }
-  }
+  const onPath = findOnPath(exe)
+  if (onPath) return onPath
+  // PATH can be missing the real install dir — notably on macOS, where an app launched from
+  // Finder inherits only a minimal PATH (see shell-path.ts). Probe the known install locations.
   const fallbacks = [
     path.join(
       os.homedir(),
       'AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe',
       'claude.exe'
     ),
-    path.join(os.homedir(), '.local', 'bin', exe)
+    path.join(os.homedir(), '.local', 'bin', exe),
+    '/opt/homebrew/bin/claude', // Apple Silicon Homebrew
+    '/usr/local/bin/claude' // Intel Homebrew / common /usr/local install
   ]
   for (const f of fallbacks) {
     try {
@@ -65,6 +88,7 @@ export interface PtyOptions {
   continueLast?: boolean
   resumeId?: string
   startupCommand?: string
+  appearance?: 'dark' | 'light'
   onData: (data: string) => void
   onExit: (code: number) => void
 }
@@ -92,15 +116,9 @@ export class PtySession {
     let file: string
     let args: string[] = []
 
-    if (opts.kind === 'powershell') {
-      file = resolvePwsh()
-      args = ['-NoLogo']
-    } else if (opts.kind === 'cmd') {
-      file = process.env.ComSpec || 'cmd.exe'
-      args = []
-    } else {
+    if (opts.kind === 'claude') {
       // claude: inject hooks + pass session id/port so the forwarder can reach us
-      this.injected = writeInjectedSession()
+      this.injected = writeInjectedSession(opts.appearance)
       file = resolveClaudePath()
       args = ['--settings', this.injected.settingsPath]
       if (opts.resumeId) args.push('--resume', opts.resumeId)
@@ -108,6 +126,8 @@ export class PtySession {
       env.ORBIT_HOOK_PORT = String(opts.hookPort)
       env.ORBIT_HOOK_TOKEN = opts.hookToken
       env.ORBIT_SESSION_ID = opts.sessionId
+    } else {
+      ;({ file, args } = resolveShell(opts.kind))
     }
 
     this.term = pty.spawn(file, args, {

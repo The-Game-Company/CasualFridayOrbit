@@ -130,12 +130,33 @@ same manifest also drives:
 
 ## Run it
 
-```powershell
-npm install
-npm run dev      # dev server + hot reload
-# or
-npm run build && npm run preview
+**Quick setup** (installs Node + the Claude Code CLI if missing, then deps, then runs/builds):
+
+```bash
+# macOS (Apple Silicon or Intel)
+scripts/setup-mac.sh            # set up + launch dev
+scripts/setup-mac.sh --dmg      # set up + build a .dmg / .zip
 ```
+
+```powershell
+# Windows
+pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1             # set up + launch dev
+pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -Installer  # set up + NSIS installer
+```
+
+**Manual:**
+
+```bash
+npm install
+npm run dev               # dev server + hot reload
+# package a distributable:
+npm run dist              # unpacked app  (dist/)
+npm run dist:installer    # Windows: NSIS .exe · macOS: .dmg + .zip
+```
+
+> Orbit drives your **logged-in** `claude`, so after install run `claude` once and sign in
+> with your subscription (no API key). macOS builds aren't code-signed; on first launch
+> right-click the app → **Open**.
 
 > **First-install gotcha:** if `npm run dev` fails with `Error: Electron uninstall`, the
 > Electron binary didn't download during install. Fix:
@@ -181,4 +202,6 @@ src/
 - On first run in a folder, `claude` shows its **trust prompt** (and possibly a
   **review-hooks prompt**) in the terminal — answer it there.
 - Skill detection assumes the `Skill` tool input key is `skill`/`skill_name`/`name`.
-- Packaging (electron-builder) not set up yet — this is the local prototype.
+- macOS packaging is unsigned/un-notarized — fine for a local build, but a downloaded copy
+  would need `xattr -dr com.apple.quarantine Orbit.app` (or right-click → Open) to bypass
+  Gatekeeper. Set up a Developer ID + notarization before distributing.

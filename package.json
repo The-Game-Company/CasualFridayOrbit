@@ -6,7 +6,10 @@
   "author": "Shozd",
   "license": "MIT",
   "scripts": {
+    "capture-claude-version": "node scripts/capture-claude-version.mjs",
+    "predev": "node scripts/capture-claude-version.mjs",
     "dev": "electron-vite dev",
+    "prebuild": "node scripts/capture-claude-version.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "dist": "electron-vite build && electron-builder --dir",
@@ -20,6 +23,7 @@
     },
     "files": [
       "out/**/*",
+      "resources/**",
       "package.json"
     ],
     "asarUnpack": [
@@ -27,7 +31,16 @@
     ],
     "npmRebuild": false,
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "resources/orbit.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "resources/orbit.icns",
+      "category": "public.app-category.developer-tools"
     }
   },
   "devDependencies": {

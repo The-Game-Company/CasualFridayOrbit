@@ -17,6 +17,9 @@ var http = require('http');
 var port = process.env.ORBIT_HOOK_PORT;
 var token = process.env.ORBIT_HOOK_TOKEN || '';
 var sessionId = process.env.ORBIT_SESSION_ID || '';
+// claude exports the live reasoning effort to its child processes (incl. this hook), so we
+// can surface a per-session effort that the CLI itself doesn't always display.
+var effort = process.env.CLAUDE_EFFORT || '';
 var event = process.argv[2] || 'unknown';
 var body = '';
 var done = false;
@@ -30,7 +33,7 @@ function send() {
   if (!port) return exit();
   var data;
   try { data = JSON.parse(body); } catch (e) { data = { raw: body }; }
-  var payload = JSON.stringify({ event: event, token: token, sessionId: sessionId, ts: Date.now(), data: data });
+  var payload = JSON.stringify({ event: event, token: token, sessionId: sessionId, effort: effort, ts: Date.now(), data: data });
   var req = http.request({
     host: '127.0.0.1', port: Number(port), path: '/hook', method: 'POST',
     headers: {
@@ -59,7 +62,7 @@ export interface InjectedSession {
  * that wires every interesting hook to it. This is passed to claude via `--settings`,
  * which MERGES with the user's global settings (it never clobbers them).
  */
-export function writeInjectedSession(): InjectedSession {
+export function writeInjectedSession(appearance?: 'dark' | 'light'): InjectedSession {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-'))
   const forwarder = path.join(dir, 'hook-forwarder.cjs')
   fs.writeFileSync(forwarder, FORWARDER_SRC, 'utf8')
@@ -72,6 +75,9 @@ export function writeInjectedSession(): InjectedSession {
   })
 
   const settings = {
+    // Match claude's TUI theme to Orbit's appearance so diffs/syntax render with the
+    // right contrast (light backgrounds in light mode). Merged via --settings.
+    ...(appearance ? { theme: appearance } : {}),
     hooks: {
       PreToolUse: [entry('PreToolUse', '*')],
       PostToolUse: [entry('PostToolUse', '*')],

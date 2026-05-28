@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppConfig,
   OrbitCommand,
@@ -7,31 +7,39 @@ import type {
   HookEvent,
   KeyDoc,
   LogState,
+  McpServer,
   Project,
   ProjectInfo,
   Skill,
   TermKind,
+  UpdateStatus,
   WorkspaceState
 } from '../../shared/events'
-import { applyEvent, initSession, type SessionState } from './session-model'
+import { applyEvent, initSession, tabWindows, type SessionState, type Tab } from './session-model'
+import { applyTheme, THEMES } from './themes'
 import { Terminal, type TermHandle } from './components/Terminal'
 import { TabBar } from './components/TabBar'
-import { Toolbar } from './components/Toolbar'
 import { Pane } from './components/Pane'
 import { Projects } from './components/Projects'
 import { SkillsPanel } from './components/SkillsPanel'
+import { McpPanel } from './components/McpPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { HistoryModal } from './components/HistoryModal'
+import { ShortcutsModal } from './components/ShortcutsModal'
+import { ConfirmModal } from './components/ConfirmModal'
+import { UpdateModal } from './components/UpdateModal'
 import { ContextPanel } from './components/ContextPanel'
 import { FileTree } from './components/FileTree'
 import { EditorModal } from './components/EditorModal'
 import { CoordPanel } from './components/CoordPanel'
 import { LogPanel } from './components/LogPanel'
 import { SubAgents } from './components/SubAgents'
+import { SkillHud } from './components/SkillHud'
 import { DocsStrip } from './components/DocsStrip'
 import { CommandBar } from './components/CommandBar'
 import { Activity } from './components/Activity'
-import { KIND_META } from './kind-meta'
+import { EyeOffIcon } from './components/icons'
+import { KIND_META, defaultShellKind } from './kind-meta'
 
 /** Find a project (or sub-project) name by path, searching nested workspace members. */
 function findProjectName(list: Project[], targetPath: string): string | null {
@@ -67,6 +75,16 @@ function leaseCoversPath(resource: string, absPath: string, projectPath: string)
   return re.test(rel)
 }
 
+/** Sort top-level projects by the user's saved order; unknown ones keep their original
+ *  relative position at the end (Array.sort is stable). */
+function orderProjects(projects: Project[], order: string[] | undefined): Project[] {
+  if (!order?.length) return projects
+  const rank = new Map(order.map((p, i) => [p, i]))
+  return [...projects].sort(
+    (a, b) => (rank.get(a.path) ?? Infinity) - (rank.get(b.path) ?? Infinity)
+  )
+}
+
 function uid(): string {
   try {
     return crypto.randomUUID()
@@ -75,7 +93,7 @@ function uid(): string {
   }
 }
 
-/** Columns for a grid of n visible panes. */
+/** Columns for a grid of n visible windows. */
 function gridCols(n: number): number {
   if (n <= 1) return 1
   if (n <= 2) return 2
@@ -84,27 +102,128 @@ function gridCols(n: number): number {
   return Math.ceil(Math.sqrt(n))
 }
 
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a)
+
+interface Cell {
+  col: number
+  rowStart: number
+  rowSpan: number
+}
+
 /**
- * The panes the grid renders for a project. Tabs and split are independent:
- *  - the split set (`split`) is an explicitly-pinned group of sessions tiled together;
- *  - the active tab is just focus and never mutates that set.
- * So if the focused tab belongs to a real (>=2) split we show the whole split; otherwise
- * we show the single active tab. Switching to a tab outside the split shows it alone while
- * the split stays pinned in state — click any of its members to bring the grid back.
+ * Grid placement from an explicit column layout. Each column is a vertical stack; a column
+ * with fewer windows lets each take more height. The grid is always completely filled (row
+ * count is the LCM of the per-column window counts, so every span is a whole number of rows).
+ * Returns a map from window id to its cell so placement follows the stored structure exactly —
+ * splitting/closing manipulate the columns, and the layout never reflows on its own.
  */
-function paneIds(
-  split: string[],
-  activeId: string | null,
-  sessions: SessionState[],
-  project: string | null
-): string[] {
-  const set = split.filter((id) => sessions.some((s) => s.id === id && s.projectPath === project))
-  if (set.length >= 2 && activeId && set.includes(activeId)) return set
-  if (activeId && sessions.some((s) => s.id === activeId && s.projectPath === project)) return [activeId]
-  return set.slice(0, 1)
+function columnLayout(columns: string[][]): { cols: number; rows: number; cellOf: Map<string, Cell> } {
+  const live = columns.filter((c) => c.length > 0)
+  const cellOf = new Map<string, Cell>()
+  if (live.length === 0) return { cols: 1, rows: 1, cellOf }
+  const rows = live.reduce((m, c) => (m * c.length) / gcd(m, c.length), 1)
+  live.forEach((col, ci) => {
+    const span = rows / col.length
+    col.forEach((id, j) => cellOf.set(id, { col: ci + 1, rowStart: j * span + 1, rowSpan: span }))
+  })
+  return { cols: live.length, rows, cellOf }
+}
+
+/** A tab's columns with dead/closed sessions filtered out and now-empty columns dropped. */
+function liveColumns(tab: Tab | null | undefined, sessions: SessionState[]): string[][] {
+  if (!tab) return []
+  return tab.columns
+    .map((col) => col.filter((w) => sessions.some((s) => s.id === w)))
+    .filter((col) => col.length > 0)
+}
+
+/**
+ * Distribute a flat, ordered window list into balanced columns — used to seed a column layout
+ * from legacy/persisted data that only had a flat list. Mirrors the old count-based tiling
+ * (gridCols columns, leftmost columns hold the extra window) so restored layouts read the same.
+ */
+function columnsFromFlat(ids: string[]): string[][] {
+  if (ids.length <= 1) return ids.length ? [[...ids]] : []
+  const cols = gridCols(ids.length)
+  const base = Math.floor(ids.length / cols)
+  const rem = ids.length % cols
+  const out: string[][] = []
+  let k = 0
+  for (let c = 0; c < cols; c++) {
+    const cnt = c < rem ? base + 1 : base
+    if (cnt > 0) out.push(ids.slice(k, k + cnt))
+    k += cnt
+  }
+  return out
+}
+
+/**
+ * Place a freshly-split window relative to the active window. Matches the old grid's *feel*
+ * without its reflow: when the balanced grid would gain a column (gridCols grows), the new
+ * window opens a fresh column right after the active one; otherwise it stacks directly below
+ * the active window in its own column ("split the height where the column is"). Either way the
+ * existing windows keep their columns, so a later close only shrinks the affected one.
+ */
+function splitInsert(columns: string[][], activeWindow: string, id: string): string[][] {
+  const cols = columns.map((c) => [...c])
+  const n = cols.reduce((a, c) => a + c.length, 0)
+  let ci = cols.findIndex((c) => c.includes(activeWindow))
+  if (ci < 0) ci = cols.length - 1
+  if (cols.length === 0) return [[id]]
+  if (gridCols(n + 1) > cols.length) {
+    cols.splice(ci + 1, 0, [id])
+  } else {
+    const col = cols[ci]
+    const at = col.indexOf(activeWindow)
+    col.splice(at >= 0 ? at + 1 : col.length, 0, id)
+  }
+  return cols
+}
+
+/** Windows of a tab that still have a live session (filters out closed/excluded ids). */
+function liveWindows(tab: Tab | null | undefined, sessions: SessionState[]): string[] {
+  if (!tab) return []
+  return tabWindows(tab).filter((w) => sessions.some((s) => s.id === w))
+}
+
+/**
+ * Build the tab hierarchy from a legacy (pre-hierarchy) workspace, where "splits" were a
+ * separate per-project set layered over a flat session list. Each >=2 split group becomes
+ * one multi-window tab; every other session becomes its own single-window tab. Order follows
+ * the persisted session order so the restored layout reads the same left-to-right.
+ */
+function buildTabsFromLegacy(
+  sessions: { id: string; projectPath: string }[],
+  panesByProject?: Record<string, string[]>
+): Tab[] {
+  const memberToFirst = new Map<string, string>()
+  const groupOf = new Map<string, string[]>()
+  for (const [proj, ids] of Object.entries(panesByProject ?? {})) {
+    const f = (ids ?? []).filter((id) => sessions.some((s) => s.id === id && s.projectPath === proj))
+    if (f.length >= 2) {
+      groupOf.set(f[0], f)
+      f.forEach((id) => memberToFirst.set(id, f[0]))
+    }
+  }
+  const tabs: Tab[] = []
+  const emitted = new Set<string>()
+  for (const s of sessions) {
+    const first = memberToFirst.get(s.id)
+    if (first) {
+      if (!emitted.has(first)) {
+        emitted.add(first)
+        const w = groupOf.get(first)!
+        tabs.push({ id: uid(), projectPath: s.projectPath, columns: columnsFromFlat(w), activeWindow: w[0] })
+      }
+    } else {
+      tabs.push({ id: uid(), projectPath: s.projectPath, columns: [[s.id]], activeWindow: s.id })
+    }
+  }
+  return tabs
 }
 
 interface TabMenu {
+  /** the tab this menu acts on */
   id: string
   x: number
   y: number
@@ -115,16 +234,23 @@ export default function App(): JSX.Element {
   const [projects, setProjects] = useState<Project[]>([])
   const [root, setRoot] = useState('')
   const [skills, setSkills] = useState<Skill[]>([])
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
   const [sessions, setSessions] = useState<SessionState[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
+  // tabs own their windows; splitting = adding a window to a tab. Independent per tab.
+  const [tabs, setTabs] = useState<Tab[]>([])
+  const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [activeProject, setActiveProject] = useState<string | null>(null)
-  // explicitly-pinned split set per project (tiled grid). Independent of the active tab:
-  // switching tabs never mutates this — see paneIds().
-  const [splitByProject, setSplitByProject] = useState<Record<string, string[]>>({})
-  const [skillFlash, setSkillFlash] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [tabMenu, setTabMenu] = useState<TabMenu | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // names of busy chats when a rebuild is requested mid-turn; non-null shows the confirm modal
+  const [rebuildBusy, setRebuildBusy] = useState<string[] | null>(null)
+  // launch-time Claude Code upgrade gate (see the update-check effect below)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [updateOpen, setUpdateOpen] = useState(false)
+  const [updateChecked, setUpdateChecked] = useState(false)
+  const [upgrading, setUpgrading] = useState(false)
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [restored, setRestored] = useState(false)
@@ -138,13 +264,35 @@ export default function App(): JSX.Element {
   const [log, setLog] = useState<LogState | null>(null)
   const [keyDocs, setKeyDocs] = useState<KeyDoc[]>([])
   const [projectInfo, setProjectInfo] = useState<ProjectInfo>({ commands: [], accent: null })
+  // side-column widths (px), drag the dividers to resize; seeded from + persisted to config
+  const [widths, setWidths] = useState({ left: 230, right: 340 })
+  const [dragging, setDragging] = useState<'left' | 'right' | null>(null)
+  // window id that auto-focus just jumped to — shows a highlight until the user interacts
+  const [autoFocused, setAutoFocused] = useState<string | null>(null)
+  // ordered queue of background windows that have finished and want attention (oldest first);
+  // auto-focus drains it one at a time as the user hands off the window they're on
+  const [finishedQueue, setFinishedQueue] = useState<string[]>([])
 
   const handles = useRef<Map<string, TermHandle>>(new Map())
   const activeIdRef = useRef<string | null>(null)
   const activeProjectRef = useRef<string | null>(null)
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSaved = useRef<string>('')
+  const widthsRef = useRef(widths)
+  widthsRef.current = widths
+  const configRef = useRef<AppConfig | null>(config)
+  configRef.current = config
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+  const widthsSeeded = useRef(false)
+
+  // The active tab and, within it, the focused window (= what the toolbar/skills act on).
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null
+  const activeId =
+    activeTab && sessions.some((s) => s.id === activeTab.activeWindow)
+      ? activeTab.activeWindow
+      : liveWindows(activeTab, sessions)[0] ?? null
+
   useEffect(() => {
     activeIdRef.current = activeId
   }, [activeId])
@@ -152,9 +300,62 @@ export default function App(): JSX.Element {
     activeProjectRef.current = activeProject
   }, [activeProject])
 
+  // seed the side-column widths from config once it has loaded
+  useEffect(() => {
+    if (config && !widthsSeeded.current) {
+      widthsSeeded.current = true
+      setWidths({ left: config.leftWidth ?? 230, right: config.rightWidth ?? 340 })
+    }
+  }, [config])
+
+  // start dragging a column divider: track the mouse, resize live, persist on release
+  const startResize = (which: 'left' | 'right') => (e: React.MouseEvent): void => {
+    e.preventDefault()
+    setDragging(which)
+    const startX = e.clientX
+    const start = which === 'left' ? widthsRef.current.left : widthsRef.current.right
+    const clamp = (n: number): number => Math.max(160, Math.min(620, n))
+    const onMove = (ev: MouseEvent): void => {
+      const delta = ev.clientX - startX
+      const next = clamp(which === 'left' ? start + delta : start - delta)
+      setWidths((w) => ({ ...w, [which]: next }))
+    }
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      setDragging(null)
+      const cfg = configRef.current
+      if (cfg) window.orbit.setConfig({ ...cfg, leftWidth: widthsRef.current.left, rightWidth: widthsRef.current.right })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
   const updateSession = useCallback((id: string, fn: (s: SessionState) => SessionState) => {
     setSessions((prev) => prev.map((s) => (s.id === id ? fn(s) : s)))
   }, [])
+
+  // projects shown in the user's saved order (drag-to-reorder in the Projects panel)
+  const orderedProjects = useMemo(
+    () => orderProjects(projects, config?.projectOrder),
+    [projects, config?.projectOrder]
+  )
+
+  // flat, display-order list of selectable projects (top-level + nested), minus hidden ones —
+  // used by the Ctrl+Shift+↑/↓ "move between projects" shortcut.
+  const visibleProjectsFlat = useMemo(() => {
+    const hidden = new Set(config?.hidden ?? [])
+    const out: Project[] = []
+    const walk = (list: Project[]): void => {
+      for (const p of list) {
+        if (hidden.has(p.path)) continue
+        out.push(p)
+        if (p.subprojects?.length) walk(p.subprojects)
+      }
+    }
+    walk(orderedProjects)
+    return out
+  }, [orderedProjects, config?.hidden])
 
   // initial load + (optionally) restore the previous workspace
   useEffect(() => {
@@ -177,25 +378,51 @@ export default function App(): JSX.Element {
           if (!keep.length) return
           const keptIds = new Set(keep.map((s) => s.id))
           setSessions(
-            keep.map((p) => initSession(p.id, p.projectPath, p.projectName, p.kind, p.title, p.resumeId))
+            keep.map((p) => ({
+              ...initSession(p.id, p.projectPath, p.projectName, p.kind, p.title, p.resumeId),
+              lastPrompt: p.lastPrompt ?? ''
+            }))
           )
-          const splits: Record<string, string[]> = {}
-          for (const [proj, ids] of Object.entries(ws.panesByProject ?? {})) {
-            if (exclude.has(proj)) continue
-            const f = ids.filter((id) => keptIds.has(id))
-            // only >=2 panes is a real split; a single id is just a normal tab
-            if (f.length >= 2) splits[proj] = f
+
+          // Tabs: use the persisted hierarchy if present, else migrate the legacy split map.
+          let restoredTabs: Tab[]
+          if (Array.isArray(ws.tabs) && ws.tabs.length) {
+            restoredTabs = ws.tabs
+              .filter((t) => !exclude.has(t.projectPath))
+              .map((t) => {
+                // new data carries `columns`; pre-column data only had a flat `windows` list
+                const columns = t.columns
+                  ? t.columns.map((col) => col.filter((id) => keptIds.has(id))).filter((col) => col.length > 0)
+                  : columnsFromFlat((t.windows ?? []).filter((id) => keptIds.has(id)))
+                if (!columns.length) return null
+                const flat = columns.flat()
+                const aw = t.activeWindow && flat.includes(t.activeWindow) ? t.activeWindow : flat[0]
+                return { id: t.id, projectPath: t.projectPath, columns, activeWindow: aw } as Tab
+              })
+              .filter((t): t is Tab => !!t)
+          } else {
+            restoredTabs = buildTabsFromLegacy(keep, ws.panesByProject)
           }
-          setSplitByProject(splits)
-          let ai = ws.activeId && keptIds.has(ws.activeId) ? ws.activeId : null
-          const ap = ai
-            ? keep.find((s) => s.id === ai)!.projectPath
-            : ws.activeProject && !exclude.has(ws.activeProject)
-              ? ws.activeProject
-              : keep[0].projectPath
-          if (!ai) ai = splits[ap]?.[0] ?? keep.find((s) => s.projectPath === ap)?.id ?? null
-          setActiveProject(ap)
-          setActiveId(ai)
+          // any kept session not covered by a tab (partial/old data) gets its own tab
+          const covered = new Set(restoredTabs.flatMap((t) => tabWindows(t)))
+          for (const s of keep)
+            if (!covered.has(s.id))
+              restoredTabs.push({ id: uid(), projectPath: s.projectPath, columns: [[s.id]], activeWindow: s.id })
+          setTabs(restoredTabs)
+
+          // Active tab: persisted activeTabId → tab holding legacy activeId → active project → first.
+          let atid = ws.activeTabId && restoredTabs.some((t) => t.id === ws.activeTabId) ? ws.activeTabId : null
+          if (!atid && ws.activeId) atid = restoredTabs.find((t) => tabWindows(t).includes(ws.activeId!))?.id ?? null
+          if (!atid) {
+            const ap0 = ws.activeProject && !exclude.has(ws.activeProject) ? ws.activeProject : null
+            atid = (ap0 && restoredTabs.find((t) => t.projectPath === ap0)?.id) || restoredTabs[0]?.id || null
+          }
+          const at = restoredTabs.find((t) => t.id === atid) ?? null
+          setActiveTabId(atid)
+          setActiveProject(
+            at?.projectPath ??
+              (ws.activeProject && !exclude.has(ws.activeProject) ? ws.activeProject : keep[0].projectPath)
+          )
           // we filtered, so allow the first persist to rewrite the trimmed workspace
           lastSaved.current = ''
         })
@@ -203,11 +430,36 @@ export default function App(): JSX.Element {
     })
   }, [])
 
+  // On launch, ask the main process whether Claude Code can be upgraded. Claude can't be
+  // replaced while a session holds the binary open, so if an upgrade is available we raise the
+  // gate *before* any terminal spawns (see the lazy-resume effect, which waits on updateChecked).
+  // A fallback timer guarantees we never block startup if the version probe hangs.
+  useEffect(() => {
+    let settled = false
+    const finish = (s?: UpdateStatus): void => {
+      if (settled) return
+      settled = true
+      if (s) {
+        setUpdate(s)
+        if (s.updateAvailable) setUpdateOpen(true)
+      }
+      setUpdateChecked(true)
+    }
+    window.orbit
+      .checkUpdate()
+      .then(finish)
+      .catch(() => finish())
+    const t = setTimeout(() => finish(), 8000)
+    return () => clearTimeout(t)
+  }, [])
+
   // persist the workspace whenever the restartable shape changes (debounced, crash-safe).
   // When restore-on-launch is off we skip saving so the last layout is preserved for when
   // it's re-enabled (rather than being overwritten with the empty boot state).
   useEffect(() => {
-    if (!restored || !config?.restoreOnLaunch) return
+    // While upgrading we deliberately clear tabs/sessions; don't let that wipe the saved layout
+    // so the user's windows come back after the post-upgrade relaunch.
+    if (!restored || !config?.restoreOnLaunch || upgrading) return
     const snapshot: WorkspaceState = {
       sessions: sessions.map((s) => ({
         id: s.id,
@@ -215,21 +467,28 @@ export default function App(): JSX.Element {
         projectName: s.projectName,
         kind: s.kind,
         title: s.title,
-        resumeId: s.resumeId
+        resumeId: s.resumeId,
+        lastPrompt: s.lastPrompt ? s.lastPrompt.slice(0, 500) : undefined
       })),
-      panesByProject: splitByProject,
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        projectPath: t.projectPath,
+        columns: t.columns,
+        activeWindow: t.activeWindow
+      })),
       activeProject,
-      activeId
+      activeTabId
     }
     const str = JSON.stringify(snapshot)
     if (str === lastSaved.current) return
     lastSaved.current = str
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => window.orbit.saveWorkspace(snapshot), 400)
-  }, [sessions, splitByProject, activeProject, activeId, restored, config?.restoreOnLaunch])
+  }, [sessions, tabs, activeProject, activeTabId, restored, config?.restoreOnLaunch, upgrading])
 
   useEffect(() => {
     window.orbit.listSkills(activeProject).then(setSkills)
+    window.orbit.listMcp(activeProject).then(setMcpServers)
     // re-point coordination + log watchers and pinned docs at the active project
     setCoord(null)
     setLog(null)
@@ -270,12 +529,32 @@ export default function App(): JSX.Element {
   )
 
   useEffect(() => {
-    if (config) document.documentElement.dataset.theme = config.theme
-  }, [config])
+    if (!config) return
+    applyTheme(config.theme)
+    // applyTheme rewrites every token (incl. --accent); restore the active
+    // project's accent override on top so a theme switch doesn't drop it
+    if (projectInfo.accent) document.documentElement.style.setProperty('--accent', projectInfo.accent)
+  }, [config?.theme, projectInfo.accent])
 
-  // mark currently-visible sessions as "started" so their Terminals spawn (lazy-resume)
+  // claude reads its TUI theme once, at spawn — so a live session can't recolor on the fly.
+  // When the appearance flips (dark <-> light), refresh each live claude session by relaunching
+  // it with --resume (same conversation, repainted in the matching theme) — a soft "reload".
+  const prevAppearance = useRef<'dark' | 'light' | null>(null)
   useEffect(() => {
-    const eff = paneIds(splitByProject[activeProject ?? ''] ?? [], activeId, sessions, activeProject)
+    if (!config) return
+    const appearance = THEMES[config.theme].appearance
+    const prev = prevAppearance.current
+    prevAppearance.current = appearance
+    if (prev === null || prev === appearance) return
+    for (const h of handles.current.values()) h.refresh()
+  }, [config?.theme])
+
+  // mark the active tab's windows as "started" so their Terminals spawn (lazy-resume).
+  // Held until the launch update check resolves, and while the upgrade gate is open, so we
+  // never spawn a claude.exe that would lock the binary out of an in-progress upgrade.
+  useEffect(() => {
+    if (!updateChecked || updateOpen) return
+    const eff = liveWindows(activeTab, sessions)
     if (!eff.length) return
     setStarted((prev) => {
       let changed = false
@@ -283,7 +562,7 @@ export default function App(): JSX.Element {
       for (const id of eff) if (!next.has(id)) (next.add(id), (changed = true))
       return changed ? next : prev
     })
-  }, [splitByProject, activeProject, activeId, sessions])
+  }, [tabs, activeTabId, sessions, updateChecked, updateOpen])
 
   useEffect(
     () => window.orbit.onContextTree((sid, tree) => updateSession(sid, (s) => ({ ...s, context: tree }))),
@@ -311,16 +590,51 @@ export default function App(): JSX.Element {
       window.orbit.onHookEvent((evt: HookEvent) => {
         const focused = evt.sessionId === activeIdRef.current
         updateSession(evt.sessionId, (s) => applyEvent(s, evt, focused))
-        if (evt.event === 'PreToolUse' && evt.data?.tool_name === 'Skill') {
-          const i = evt.data?.tool_input ?? {}
-          const name = String(i.skill ?? i.skill_name ?? i.name ?? 'skill')
-          setSkillFlash(name)
-          if (flashTimer.current) clearTimeout(flashTimer.current)
-          flashTimer.current = setTimeout(() => setSkillFlash(null), 4000)
-        }
       }),
     [updateSession]
   )
+
+  // open Settings / History from the native menu bar (the in-app titlebar/toolbar are gone)
+  useEffect(() => {
+    return window.orbit.onMenuCommand((cmd) => {
+      if (cmd === 'settings') {
+        setSettingsOpen(true)
+      } else if (cmd === 'rebuild') {
+        // Warn before tearing the app down if any chat is mid-turn — a rebuild kills
+        // every running session, losing work in progress. Use an in-app modal (not the
+        // native window.confirm, which is unstyled and yanks terminal focus).
+        const busy = sessionsRef.current.filter((s) => s.status === 'busy')
+        if (busy.length > 0) setRebuildBusy(busy.map((s) => s.projectName))
+        else window.orbit.rebuildApp()
+      } else if (cmd === 'shortcuts') {
+        setShortcutsOpen(true)
+      } else if (cmd === 'history') {
+        const ap = activeProjectRef.current
+        if (!ap) return
+        setHistoryOpen(true)
+        setHistoryLoading(true)
+        window.orbit.listHistory(ap).then((entries) => {
+          setHistoryEntries(entries)
+          setHistoryLoading(false)
+        })
+      }
+    })
+  }, [])
+
+  // claude sets the terminal title (OSC) to a short summary of the conversation. Use it to
+  // label the tab as "Project - <summary>". We ignore the noise titles a shell/claude emits
+  // before it has anything meaningful (a path, the bare exe name, or an empty string).
+  function retitleFromTerminal(id: string, raw: string): void {
+    const t = raw.replace(/\s+/g, ' ').trim()
+    if (!t) return
+    const lower = t.toLowerCase()
+    if (lower === 'claude' || t.includes('\\') || t.includes('/') || /^[a-z]:/i.test(t)) return
+    updateSession(id, (s) => {
+      const summary = t.length > 60 ? t.slice(0, 60) + '…' : t
+      const title = `${s.projectName} - ${summary}`
+      return s.title === title ? s : { ...s, title }
+    })
+  }
 
   // ---- creating / focusing / splitting ----
   function projectNameFor(projectPath: string): string {
@@ -332,10 +646,22 @@ export default function App(): JSX.Element {
     )
   }
 
+  /**
+   * Create a session. Where it lands:
+   *  - `targetTabId`  → a new window inside that specific tab (context-menu split),
+   *  - `split: true`  → a new window inside the *current* tab (if it's this project),
+   *  - otherwise      → a brand-new single-window tab.
+   */
   function createSession(
     projectPath: string,
     kind: TermKind,
-    opts?: { split?: boolean; resumeId?: string; startupCommand?: string; titleOverride?: string }
+    opts?: {
+      split?: boolean
+      targetTabId?: string
+      resumeId?: string
+      startupCommand?: string
+      titleOverride?: string
+    }
   ): void {
     const id = uid()
     const name = projectNameFor(projectPath)
@@ -348,25 +674,29 @@ export default function App(): JSX.Element {
       initSession(id, projectPath, name, kind, label, opts?.resumeId, opts?.startupCommand)
     ])
     setActiveProject(projectPath)
-    setActiveId(id)
-    // A plain new tab never touches the split set (they're independent). A split adds the
-    // new session to the project's pinned grid, seeding it with the current tab if empty.
-    if (opts?.split) {
-      const seed =
-        activeId && sessions.some((s) => s.id === activeId && s.projectPath === projectPath)
-          ? activeId
-          : null
-      setSplitByProject((prev) => {
-        const cur = prev[projectPath] ?? []
-        const base = cur.length ? cur : seed ? [seed] : []
-        return { ...prev, [projectPath]: [...base, id] }
-      })
+
+    const target =
+      (opts?.targetTabId ? tabs.find((t) => t.id === opts.targetTabId) : undefined) ??
+      (opts?.split ? tabs.find((t) => t.id === activeTabId && t.projectPath === projectPath) : undefined)
+
+    if (target) {
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== target.id) return t
+          return { ...t, columns: splitInsert(t.columns, t.activeWindow, id), activeWindow: id }
+        })
+      )
+      setActiveTabId(target.id)
+    } else {
+      const tabId = uid()
+      setTabs((prev) => [...prev, { id: tabId, projectPath, columns: [[id]], activeWindow: id }])
+      setActiveTabId(tabId)
     }
   }
 
   function runCommand(cmd: OrbitCommand): void {
     if (!activeProject) return
-    createSession(activeProject, cmd.shell ?? 'powershell', {
+    createSession(activeProject, cmd.shell ?? defaultShellKind(window.orbit.platform), {
       split: true,
       startupCommand: cmd.run,
       titleOverride: cmd.label
@@ -374,145 +704,296 @@ export default function App(): JSX.Element {
   }
 
   // ---- history ----
-  function openHistory(): void {
-    if (!activeProject) return
-    setHistoryOpen(true)
-    setHistoryLoading(true)
-    window.orbit.listHistory(activeProject).then((entries) => {
-      setHistoryEntries(entries)
-      setHistoryLoading(false)
-    })
-  }
-
   function pickHistory(entry: HistoryEntry): void {
     setHistoryOpen(false)
     if (!activeProject) return
-    // if it's already open, just focus it instead of resuming a duplicate
+    // if it's already open, just focus its window instead of resuming a duplicate
     const existing = sessions.find((s) => s.resumeId === entry.sessionId)
     if (existing) {
-      focusSession(existing.id)
+      focusWindow(existing.id)
       return
     }
     createSession(activeProject, 'claude', { resumeId: entry.sessionId })
   }
 
-  function focusSession(id: string): void {
-    const s = sessions.find((x) => x.id === id)
-    if (!s) return
-    // Tabs are independent of split: focusing only moves the active tab. If the focused
-    // session is part of the project's split, the grid keeps showing the whole split;
-    // otherwise it shows this session alone. Either way the split set is left intact.
-    setActiveProject(s.projectPath)
-    setActiveId(id)
-    updateSession(id, (x) => ({ ...x, unseen: false, status: x.status === 'waiting' ? 'idle' : x.status }))
-    setTimeout(() => handles.current.get(id)?.focus(), 0)
+  /** Focus a whole tab (its current active window). */
+  function focusTab(tabId: string): void {
+    const t = tabs.find((x) => x.id === tabId)
+    if (!t) return
+    setActiveProject(t.projectPath)
+    setActiveTabId(tabId)
+    const win = sessions.some((s) => s.id === t.activeWindow) ? t.activeWindow : liveWindows(t, sessions)[0]
+    if (win) {
+      updateSession(win, (x) => ({ ...x, unseen: false, status: x.status === 'waiting' ? 'idle' : x.status }))
+      setTimeout(() => handles.current.get(win)?.focus(), 0)
+    }
+  }
+
+  /** Focus a specific window (and the tab that owns it). */
+  function focusWindow(windowId: string): void {
+    const t = tabs.find((x) => tabWindows(x).includes(windowId))
+    if (!t) return
+    setActiveProject(t.projectPath)
+    setActiveTabId(t.id)
+    setTabs((prev) => prev.map((x) => (x.id === t.id ? { ...x, activeWindow: windowId } : x)))
+    updateSession(windowId, (x) => ({ ...x, unseen: false, status: x.status === 'waiting' ? 'idle' : x.status }))
+    setTimeout(() => handles.current.get(windowId)?.focus(), 0)
   }
 
   function openProject(p: Project): void {
-    const existing = sessions.filter((s) => s.projectPath === p.path)
-    if (existing.length > 0) {
+    const projTabs = tabs.filter((t) => t.projectPath === p.path)
+    if (projTabs.length > 0) {
       setActiveProject(p.path)
-      const split = splitByProject[p.path]
-      focusSession(split && split.length ? split[0] : existing[existing.length - 1].id)
+      focusTab(projTabs[projTabs.length - 1].id)
     } else {
       createSession(p.path, 'claude')
     }
   }
 
-  function addToSplit(id: string): void {
-    const s = sessions.find((x) => x.id === id)
-    if (!s) return
-    // pin `id` into the project's split, seeding with the current tab so a lone tab
-    // becomes a real 2-up split. Focus `id` so the grid shows the split.
-    setSplitByProject((prev) => {
-      const cur = prev[s.projectPath] ?? []
-      if (cur.includes(id)) return prev
-      const base = cur.length ? cur : activeId && activeId !== id ? [activeId] : []
-      return { ...prev, [s.projectPath]: [...base, id] }
-    })
-    setActiveProject(s.projectPath)
-    setActiveId(id)
-  }
-
-  function removeFromSplit(id: string): void {
-    const s = sessions.find((x) => x.id === id)
-    if (!s) return
-    const next = (splitByProject[s.projectPath] ?? []).filter((x) => x !== id)
-    setSplitByProject((prev) => {
-      // a split of <=1 pane is just a normal tab — drop it so we fall back to single view
-      const n = (prev[s.projectPath] ?? []).filter((x) => x !== id)
-      const out = { ...prev }
-      if (n.length >= 2) out[s.projectPath] = n
-      else delete out[s.projectPath]
-      return out
-    })
-    // keep focus on a pane that's still visible
-    if (activeId === id) setActiveId(next[0] ?? null)
-  }
-
-  function closeTab(id: string): void {
-    const closing = sessions.find((s) => s.id === id)
-    const remaining = sessions.filter((s) => s.id !== id)
-    setSessions(remaining)
-    setSplitByProject((prev) => {
-      const out: Record<string, string[]> = {}
-      for (const [proj, ids] of Object.entries(prev)) {
-        const f = ids.filter((x) => x !== id)
-        if (f.length >= 2) out[proj] = f // collapse a now-single split back to a plain tab
-      }
-      return out
-    })
-    if (activeId === id && closing) {
-      const sameProj = remaining.filter((s) => s.projectPath === closing.projectPath)
-      const next = sameProj[sameProj.length - 1] ?? remaining[remaining.length - 1] ?? null
-      setActiveId(next?.id ?? null)
+  /** Remove a tab and move focus to a sensible neighbour (sessions removed by the caller). */
+  function dropTab(tabId: string): void {
+    const tab = tabs.find((t) => t.id === tabId)
+    const rest = tabs.filter((t) => t.id !== tabId)
+    setTabs(rest)
+    if (activeTabId === tabId && tab) {
+      const sameProj = rest.filter((t) => t.projectPath === tab.projectPath)
+      const next = sameProj[sameProj.length - 1] ?? rest[rest.length - 1] ?? null
+      setActiveTabId(next?.id ?? null)
       if (next) setActiveProject(next.projectPath)
     }
   }
 
-  // keyboard: Ctrl+\ splits the active project with a new Claude session
+  /**
+   * Close one window. If it's the tab's last window, the tab closes too — except when it's
+   * also the only tab left: closing it would leave zero tabs (which looks broken), so we no-op.
+   */
+  function closeWindow(windowId: string): void {
+    const tab = tabs.find((t) => tabWindows(t).includes(windowId))
+    if (!tab) {
+      setSessions((prev) => prev.filter((s) => s.id !== windowId))
+      return
+    }
+    // Pick the focus successor *before* removing — prefer a neighbour in the same column (below,
+    // then above), so closing a window keeps focus local instead of jumping to another column.
+    const owningCol = tab.columns.find((c) => c.includes(windowId)) ?? []
+    const at = owningCol.indexOf(windowId)
+    const neighbour = owningCol[at + 1] ?? owningCol[at - 1]
+    // Drop the window from its column; an emptied column is removed (columns to its right shift left).
+    const columns = tab.columns.map((c) => c.filter((w) => w !== windowId)).filter((c) => c.length > 0)
+    const remaining = columns.flat()
+    if (remaining.length === 0 && tabs.length === 1) return
+    setSessions((prev) => prev.filter((s) => s.id !== windowId))
+    if (remaining.length > 0) {
+      const nextActive =
+        tab.activeWindow === windowId ? neighbour ?? remaining[remaining.length - 1] : tab.activeWindow
+      setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, columns, activeWindow: nextActive } : t)))
+      return
+    }
+    dropTab(tab.id)
+  }
+
+  /** Close a whole tab (every window inside it). */
+  function closeTab(tabId: string): void {
+    const tab = tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    const winSet = new Set(tabWindows(tab))
+    setSessions((prev) => prev.filter((s) => !winSet.has(s.id)))
+    dropTab(tabId)
+  }
+
+  // keyboard:
+  //   • Ctrl+\           split the active tab with a new Claude window
+  //   • Ctrl+W           close the active window (and its tab if it was the last window)
+  //   • Ctrl+1..9        focus the Nth tab of the active project (by position)
+  //   • Ctrl+Shift+↑/↓   move to the previous/next project (and focus/open it)
   useEffect(() => {
+    // Capture phase: xterm consumes Ctrl+key combos (sends them to the PTY) before they reach
+    // a bubble-phase window listener, so we must intercept here and stop propagation when we act.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.ctrlKey && e.key === '\\') {
+      if (!e.ctrlKey || e.metaKey || e.altKey) return
+      if (document.querySelector('.modal-overlay')) return
+      const grab = (): void => {
         e.preventDefault()
+        e.stopPropagation()
+      }
+
+      if (!e.shiftKey && (e.code === 'Backslash' || e.key === '\\')) {
+        grab()
         if (activeProject) createSession(activeProject, 'claude', { split: true })
+        return
+      }
+
+      // Ctrl+T → new tab (Claude window) in the active project
+      if (!e.shiftKey && e.key.toLowerCase() === 't') {
+        if (activeProject) {
+          grab()
+          createSession(activeProject, 'claude')
+        }
+        return
+      }
+
+      // Ctrl+W → close the active window (drops the tab too if it was the last window)
+      if (!e.shiftKey && e.key.toLowerCase() === 'w') {
+        if (activeId) {
+          grab()
+          closeWindow(activeId)
+        }
+        return
+      }
+
+      // Ctrl+1..9 → tab by index within the active project
+      if (!e.shiftKey && e.code.startsWith('Digit') && e.key >= '1' && e.key <= '9') {
+        const projTabs = tabs.filter((t) => t.projectPath === activeProject)
+        const target = projTabs[Number(e.key) - 1]
+        if (target) {
+          grab()
+          focusTab(target.id)
+        }
+        return
+      }
+
+      // Ctrl+Shift+↑/↓ → previous/next project
+      if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        if (!visibleProjectsFlat.length) return
+        grab()
+        const cur = visibleProjectsFlat.findIndex((p) => p.path === activeProject)
+        const step = e.key === 'ArrowDown' ? 1 : -1
+        const base = cur < 0 ? (step > 0 ? -1 : 0) : cur
+        const next = visibleProjectsFlat[(base + step + visibleProjectsFlat.length) % visibleProjectsFlat.length]
+        openProject(next)
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject, sessions, projects])
+  }, [activeProject, sessions, projects, tabs, activeTabId, visibleProjectsFlat])
 
-  // ---- toolbar actions ----
-  function doRestart(continueLast: boolean): void {
-    if (!activeId) return
-    handles.current.get(activeId)?.restart(continueLast)
-    updateSession(activeId, (s) => ({
-      ...s,
-      status: 'idle',
-      agentsActive: 0,
-      toolsActive: 0,
-      busyFiles: [],
-      activeSkill: null,
-      exited: false
-    }))
-  }
-  const doInterrupt = (): void => {
-    if (activeId) handles.current.get(activeId)?.interrupt()
-  }
-  const doClear = (): void => {
-    if (activeId) handles.current.get(activeId)?.clear()
-  }
-  const doSplit = (): void => {
-    if (activeProject) createSession(activeProject, 'claude', { split: true })
-  }
-  const setFont = (delta: number): void => {
-    if (!config) return
-    const fontSize = Math.min(24, Math.max(9, config.fontSize + delta))
-    const next = { ...config, fontSize }
-    setConfig(next)
-    window.orbit.setConfig(next)
-  }
+  // keyboard: Alt+Arrows move between open windows, spatially.
+  //   • within the active tab's tiled grid, move to the neighbouring window in that direction
+  //   • at a left/right edge (or a single-window tab), ←/→ switch to the prev/next tab
+  // Capture-phase so we intercept before xterm's word-nav; we only swallow the key when
+  // there's somewhere to go, and never while a modal or the code editor has focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+      const dir = { ArrowLeft: 'L', ArrowRight: 'R', ArrowUp: 'U', ArrowDown: 'D' }[e.key]
+      if (!dir) return
+      if (document.querySelector('.modal-overlay')) return
+      // don't hijack arrows while editing in the docked code editor (plain textarea / Monaco)
+      if ((document.activeElement as HTMLElement | null)?.closest?.('.editor, .monaco-editor')) return
+
+      const tab = tabs.find((t) => t.id === activeTabId) ?? null
+      const cols = liveColumns(tab, sessions)
+      const lay = columnLayout(cols)
+      const aw = tab?.activeWindow ?? ''
+      let myCi = -1
+      let myRi = -1
+      cols.forEach((col, ci) => {
+        const ri = col.indexOf(aw)
+        if (ri >= 0) {
+          myCi = ci
+          myRi = ri
+        }
+      })
+
+      // 1) move to the neighbouring window in that direction within the tab's tiled layout
+      let target = ''
+      if (myCi >= 0) {
+        if (dir === 'U' || dir === 'D') {
+          // previous/next window stacked in the same column
+          const pos = myRi + (dir === 'D' ? 1 : -1)
+          if (pos >= 0 && pos < cols[myCi].length) target = cols[myCi][pos]
+        } else {
+          // window in the adjacent column whose row range covers our vertical centre
+          const tc = myCi + (dir === 'R' ? 1 : -1)
+          const me = lay.cellOf.get(aw)
+          if (me && tc >= 0 && tc < cols.length) {
+            const center = me.rowStart + me.rowSpan / 2
+            const col = cols[tc]
+            target =
+              col.find((id) => {
+                const c = lay.cellOf.get(id)!
+                return center >= c.rowStart && center <= c.rowStart + c.rowSpan
+              }) ??
+              col.reduce((best, id) => {
+                if (!best) return id
+                const c = lay.cellOf.get(id)!
+                const bc = lay.cellOf.get(best)!
+                const d = Math.abs(c.rowStart + c.rowSpan / 2 - center)
+                const bd = Math.abs(bc.rowStart + bc.rowSpan / 2 - center)
+                return d < bd ? id : best
+              }, '') ??
+              ''
+          }
+        }
+      }
+      if (target) {
+        e.preventDefault()
+        e.stopPropagation()
+        focusWindow(target)
+        return
+      }
+
+      // 2) horizontal edge -> switch tabs within the active project
+      if (dir === 'L' || dir === 'R') {
+        const ids = tabs.filter((t) => t.projectPath === activeProject).map((t) => t.id)
+        if (ids.length < 2) return
+        const ti = Math.max(0, ids.indexOf(activeTabId ?? ''))
+        const next = ids[(ti + (dir === 'R' ? 1 : -1) + ids.length) % ids.length]
+        e.preventDefault()
+        e.stopPropagation()
+        focusTab(next)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject, activeTabId, tabs, sessions])
+
+  // Dismiss the auto-focus highlight as soon as the user does anything (types, clicks, or
+  // navigates) — that's the signal they've seen the jump and taken over the window.
+  useEffect(() => {
+    if (!autoFocused) return
+    const clear = (): void => setAutoFocused(null)
+    window.addEventListener('keydown', clear, true)
+    window.addEventListener('mousedown', clear, true)
+    return () => {
+      window.removeEventListener('keydown', clear, true)
+      window.removeEventListener('mousedown', clear, true)
+    }
+  }, [autoFocused])
+
+  // Auto-focus queue: keep an ordered list of background windows that have finished and want
+  // attention. A window is "pending" exactly while its status is 'waiting' (set on a background
+  // Stop / Notification) and it isn't the one we're on. We keep discovery order and drop any
+  // window that's no longer waiting (e.g. the user visited it -> focusWindow flips it to idle).
+  useEffect(() => {
+    setFinishedQueue((prev) => {
+      const pending = new Set(
+        sessions.filter((s) => s.status === 'waiting' && s.id !== activeId).map((s) => s.id)
+      )
+      const next = prev.filter((id) => pending.has(id))
+      for (const s of sessions)
+        if (s.status === 'waiting' && s.id !== activeId && !next.includes(s.id)) next.push(s.id)
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next
+    })
+  }, [sessions, activeId])
+
+  // Drain the queue: the moment the window you're on is busy again (you handed it off by
+  // submitting input) — and you're not mid-question on it — jump to the oldest finished chat.
+  // This also covers the instant case: if you're already watching a busy chat when another
+  // finishes, it gets queued and immediately drained here.
+  useEffect(() => {
+    if (!config?.autoFocus) return
+    const cur = sessions.find((s) => s.id === activeId)
+    if (!cur || cur.status !== 'busy' || cur.awaitingInput) return
+    const nextId = finishedQueue.find((id) => id !== activeId)
+    if (!nextId) return
+    focusWindow(nextId)
+    setAutoFocused(nextId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, finishedQueue, activeId, config?.autoFocus])
+
   const pickSkill = (sk: Skill): void => {
     if (!activeId) return
     window.orbit.sessionInput(activeId, sk.command + ' ')
@@ -528,6 +1009,10 @@ export default function App(): JSX.Element {
         setProjects(projects)
       })
     }
+  }
+  const reorderProjects = (orderedPaths: string[]): void => {
+    if (!config) return
+    saveConfig({ ...config, projectOrder: orderedPaths })
   }
   const toggleExclude = (path: string): void => {
     if (!config) return
@@ -547,7 +1032,7 @@ export default function App(): JSX.Element {
   if (!config) return <div className="app loading">loading…</div>
 
   const active = sessions.find((s) => s.id === activeId) ?? null
-  const projectTabs = sessions.filter((s) => s.projectPath === activeProject)
+  const projectTabs = tabs.filter((t) => t.projectPath === activeProject)
   // union of files being touched / recently touched across ALL sessions (any agent)
   const allBusy = new Set(sessions.flatMap((s) => s.busyFiles))
   const allRecent = new Set(sessions.flatMap((s) => s.recentFiles))
@@ -557,70 +1042,61 @@ export default function App(): JSX.Element {
     editorPath && activeProject && coord
       ? (coord.leases.find((l) => leaseCoversPath(l.resource, editorPath, activeProject))?.agent ?? null)
       : null
-  // the project's pinned split set (independent of the active tab), and the panes the grid
-  // actually renders right now (the split when the active tab is part of it, else just the tab)
-  const splitSet = (splitByProject[activeProject ?? ''] ?? []).filter((id) =>
-    sessions.some((s) => s.id === id && s.projectPath === activeProject)
-  )
-  const visibleEffective = paneIds(splitSet, activeId, sessions, activeProject)
-  const cols = gridCols(visibleEffective.length)
-  const menuSession = tabMenu ? sessions.find((s) => s.id === tabMenu.id) ?? null : null
-  const menuInSplit = tabMenu ? splitSet.includes(tabMenu.id) : false
+  // the windows the grid renders right now = the active tab's live windows
+  const visibleEffective = liveWindows(activeTab, sessions)
+  const layout = columnLayout(liveColumns(activeTab, sessions))
+  const menuTab = tabMenu ? tabs.find((t) => t.id === tabMenu.id) ?? null : null
 
   return (
     <div className="app">
-      <header className="titlebar">
-        <span className="logo">◆ Orbit</span>
-        <span className="subtitle">{active ? active.projectPath : 'pick a project to start a session'}</span>
-        {skillFlash && <span className="skill-flash">✦ Skill: {skillFlash}</span>}
-        <button className="gear" onClick={() => setSettingsOpen(true)} title="Settings">
-          ⚙
-        </button>
-      </header>
-
-      <div className="columns">
-        <aside className="col col-left">
+      <div className={`columns ${dragging ? 'resizing' : ''}`}>
+        <aside className="col col-left" style={{ flex: `0 0 ${widths.left}px` }}>
           <Projects
             root={root}
-            projects={projects}
+            projects={orderedProjects}
             sessions={sessions}
             activeProject={activeProject}
             restoreExclude={config.restoreExclude ?? []}
             hidden={config.hidden ?? []}
             onOpen={openProject}
             onContext={(path, x, y) => setProjMenu({ path, x, y })}
+            onReorder={reorderProjects}
           />
           <SkillsPanel skills={skills} activeSkill={active?.activeSkill ?? null} onPick={pickSkill} />
+          <McpPanel
+            servers={mcpServers}
+            activeMcp={active?.mcpActive ?? []}
+            onOpenFile={setEditorPath}
+          />
         </aside>
+
+        <div
+          className={`col-resizer ${dragging === 'left' ? 'dragging' : ''}`}
+          onMouseDown={startResize('left')}
+          title="Drag to resize"
+        />
 
         <main className="col col-center">
           <TabBar
-            sessions={projectTabs}
-            activeId={activeId}
-            split={splitSet}
+            tabs={projectTabs}
+            sessions={sessions}
+            activeTabId={activeTabId}
             startedIds={started}
-            onSelect={focusSession}
+            onSelect={focusTab}
             onClose={closeTab}
             onNew={(kind) => activeProject && createSession(activeProject, kind)}
             onContext={(id, x, y) => setTabMenu({ id, x, y })}
             canNew={!!activeProject}
           />
-          <Toolbar
-            session={active}
-            onRestart={() => doRestart(false)}
-            onContinue={() => doRestart(true)}
-            onInterrupt={doInterrupt}
-            onClear={doClear}
-            onSplit={doSplit}
-            onHistory={openHistory}
-            canHistory={!!activeProject}
-            fontSize={config.fontSize}
-            onFont={setFont}
-            onSettings={() => setSettingsOpen(true)}
-          />
           <CommandBar commands={projectInfo.commands} onRun={runCommand} />
           <div className={`center-body ${editorDocked && editorPath ? 'split' : ''}`}>
-          <div className="terminals" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+          <div
+            className="terminals"
+            style={{
+              gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`
+            }}
+          >
             {sessions.length === 0 && (
               <div className="terminal-empty">
                 <p>Pick a project on the left to launch a Claude session.</p>
@@ -630,16 +1106,29 @@ export default function App(): JSX.Element {
               </div>
             )}
             {sessions.map((s) => {
-              const shown = visibleEffective.includes(s.id)
+              const cell = layout.cellOf.get(s.id) ?? null
               return (
-                <div key={s.id} className="term-slot" style={{ display: shown ? 'flex' : 'none' }}>
+                <div
+                  key={s.id}
+                  className="term-slot"
+                  style={
+                    cell
+                      ? {
+                          display: 'flex',
+                          gridColumn: cell.col,
+                          gridRow: `${cell.rowStart} / span ${cell.rowSpan}`
+                        }
+                      : { display: 'none' }
+                  }
+                >
                   <Pane
                     session={s}
                     active={s.id === activeId}
                     canRemove={visibleEffective.length > 1}
-                    onFocus={() => setActiveId(s.id)}
+                    autoFocused={s.id === autoFocused}
+                    onFocus={() => focusWindow(s.id)}
                     onSplit={() => createSession(s.projectPath, 'claude', { split: true })}
-                    onRemove={() => removeFromSplit(s.id)}
+                    onRemove={() => closeWindow(s.id)}
                   >
                     <Terminal
                       ref={(h) => {
@@ -655,6 +1144,9 @@ export default function App(): JSX.Element {
                       active={s.id === activeId}
                       fontSize={config.fontSize}
                       theme={config.theme}
+                      lastPrompt={s.lastPrompt}
+                      lastPromptTs={s.lastPromptTs}
+                      onTitle={(t) => retitleFromTerminal(s.id, t)}
                     />
                   </Pane>
                 </div>
@@ -676,7 +1168,14 @@ export default function App(): JSX.Element {
           </div>
         </main>
 
-        <aside className="col col-right">
+        <div
+          className={`col-resizer ${dragging === 'right' ? 'dragging' : ''}`}
+          onMouseDown={startResize('right')}
+          title="Drag to resize"
+        />
+
+        <aside className="col col-right" style={{ flex: `0 0 ${widths.right}px` }}>
+          <SkillHud session={active} />
           <div className="panel right-top">
             <div className="panel-head rt-tabs">
               <button className={`rt ${rightView === 'context' ? 'on' : ''}`} onClick={() => setRightView('context')}>
@@ -727,48 +1226,27 @@ export default function App(): JSX.Element {
         </aside>
       </div>
 
-      {tabMenu && menuSession && (
+      {tabMenu && menuTab && (
         <>
           <div className="menu-backdrop" onClick={() => setTabMenu(null)} />
           <div className="context-menu" style={{ left: tabMenu.x, top: tabMenu.y }}>
-            {menuInSplit ? (
-              <div
-                className="dropdown-item"
-                onClick={() => {
-                  removeFromSplit(tabMenu.id)
-                  setTabMenu(null)
-                }}
-              >
-                Remove from split
-              </div>
-            ) : (
-              <div
-                className="dropdown-item"
-                onClick={() => {
-                  addToSplit(tabMenu.id)
-                  setTabMenu(null)
-                }}
-              >
-                Add to split view
-              </div>
-            )}
             <div
               className="dropdown-item"
               onClick={() => {
-                createSession(menuSession.projectPath, 'claude', { split: true })
+                createSession(menuTab.projectPath, 'claude', { targetTabId: menuTab.id })
                 setTabMenu(null)
               }}
             >
-              Split → new Claude
+              Split — new Claude window
             </div>
             <div
               className="dropdown-item danger"
               onClick={() => {
-                closeTab(tabMenu.id)
+                closeTab(menuTab.id)
                 setTabMenu(null)
               }}
             >
-              Close session
+              Close tab{tabWindows(menuTab).length > 1 ? ` (${tabWindows(menuTab).length} windows)` : ''}
             </div>
           </div>
         </>
@@ -796,7 +1274,13 @@ export default function App(): JSX.Element {
                 setProjMenu(null)
               }}
             >
-              {(config.hidden ?? []).includes(projMenu.path) ? '👁 Unhide project' : '🚫 Hide project'}
+              {(config.hidden ?? []).includes(projMenu.path) ? (
+                '👁 Unhide project'
+              ) : (
+                <>
+                  <EyeOffIcon /> Hide project
+                </>
+              )}
             </div>
           </div>
         </>
@@ -815,6 +1299,47 @@ export default function App(): JSX.Element {
 
       {settingsOpen && (
         <SettingsModal config={config} onChange={saveConfig} onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+
+      {rebuildBusy && (
+        <ConfirmModal
+          title="Rebuild & Restart"
+          confirmLabel="Rebuild anyway"
+          danger
+          onConfirm={() => {
+            setRebuildBusy(null)
+            window.orbit.rebuildApp()
+          }}
+          onCancel={() => {
+            setRebuildBusy(null)
+            const id = activeIdRef.current
+            if (id) setTimeout(() => handles.current.get(id)?.focus(), 0)
+          }}
+        >
+          <p>
+            {rebuildBusy.length} chat{rebuildBusy.length > 1 ? 's are' : ' is'} still running (
+            {rebuildBusy.join(', ')}).
+          </p>
+          <p>Rebuilding will stop them and restart Orbit. Continue?</p>
+        </ConfirmModal>
+      )}
+
+      {updateOpen && update && (
+        <UpdateModal
+          status={update}
+          onDismiss={() => setUpdateOpen(false)}
+          onCloseEverything={() => {
+            // freeze persistence (so the saved layout survives), then tear down every tab/window
+            // so nothing holds claude.exe open while winget replaces the binary
+            setUpgrading(true)
+            setSessions([])
+            setTabs([])
+            setActiveTabId(null)
+            setActiveProject(null)
+          }}
+        />
       )}
 
       {editorPath && !editorDocked && (

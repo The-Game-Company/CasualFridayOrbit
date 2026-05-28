@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Notification, Menu, clipboard } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Notification, Menu, clipboard, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -7,13 +7,16 @@ import { SessionManager } from './session-manager'
 import { readContextFile } from './context-watch'
 import { listProjects } from './projects'
 import { listSkills } from './skills'
+import { listMcpServers } from './mcp'
 import { loadConfig, saveConfig } from './config'
 import { listHistory } from './history'
-import { loadWorkspace, saveWorkspace } from './workspace'
+import { loadWorkspace, saveWorkspace, loadWindowState, saveWindowState } from './workspace'
+import { checkUpdate, runUpdate, closeExternalClaude } from './updater'
 import { readDir, readTextFile, saveTextFile, FileWatcher } from './files'
 import { CoordinationWatcher } from './coordination'
 import { LogWatcher, listKeyDocs } from './logs'
 import { readProjectConfig } from './project-config'
+import { fixGuiPath } from './shell-path'
 import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type WorkspaceState } from '../shared/events'
 
 let win: BrowserWindow | null = null
@@ -35,11 +38,72 @@ function notify(title: string, body: string): void {
   }
 }
 
+const projectName = (cwd: unknown): string =>
+  (typeof cwd === 'string' && cwd.split(/[\\/]/).filter(Boolean).pop()) || 'Orbit'
+
+// Per-window reasoning effort: claude doesn't expose it to hook subprocesses when launched
+// without it in the parent env (as Orbit does), so we resolve it the way claude itself does —
+// from the settings files, most-specific first: project-local → project-shared → user-global.
+const effortCache = new Map<string, { effort: string | null; at: number }>()
+function readEffortLevel(file: string): string | null {
+  try {
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return typeof j?.effortLevel === 'string' && j.effortLevel ? j.effortLevel : null
+  } catch {
+    return null
+  }
+}
+function resolveEffort(cwd: unknown): string | null {
+  if (typeof cwd !== 'string' || !cwd) return null
+  const cached = effortCache.get(cwd)
+  if (cached && Date.now() - cached.at < 1500) return cached.effort
+  const candidates = [
+    path.join(cwd, '.claude', 'settings.local.json'),
+    path.join(cwd, '.claude', 'settings.json'),
+    path.join(app.getPath('home'), '.claude', 'settings.json')
+  ]
+  let effort: string | null = null
+  for (const f of candidates) {
+    const e = readEffortLevel(f)
+    if (e) {
+      effort = e
+      break
+    }
+  }
+  effortCache.set(cwd, { effort, at: Date.now() })
+  return effort
+}
+
+const clip = (s: unknown, n = 80): string => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim()
+  return t.length > n ? t.slice(0, n - 1) + '…' : t
+}
+
+// Remember each session's most recent prompt + project so Stop/Notification can name them.
+const lastPrompt = new Map<string, { project: string; prompt: string }>()
+
 function onHookEvent(evt: HookEvent): void {
+  const d = evt.data ?? {}
+  // stamp the live effort (read from settings, keyed on this event's project dir)
+  const effort = resolveEffort(d.cwd)
+  if (effort) evt.effort = effort
   send(IPC.HookEvent, evt)
-  // Light-touch desktop notifications.
-  if (evt.event === 'Stop') notify('Orbit', 'Turn complete')
-  if (evt.event === 'Notification' && evt.data?.message) notify('Orbit', String(evt.data.message))
+  const project = projectName(d.cwd)
+
+  if (evt.event === 'UserPromptSubmit' && d.prompt) {
+    lastPrompt.set(evt.sessionId, { project, prompt: clip(d.prompt) })
+  }
+
+  // Light-touch desktop notifications, enriched with project + the prompt being worked on.
+  if (evt.event === 'Stop') {
+    const ctx = lastPrompt.get(evt.sessionId)
+    notify(`${ctx?.project ?? project} — done`, ctx?.prompt ? `“${ctx.prompt}”` : 'Turn complete')
+  }
+  if (evt.event === 'Notification' && d.message) {
+    const ctx = lastPrompt.get(evt.sessionId)
+    const body = ctx?.prompt ? `${clip(d.message, 90)}\n“${ctx.prompt}”` : clip(d.message, 140)
+    notify(ctx?.project ?? project, body)
+  }
 }
 
 // Rebuild Orbit from source, then relaunch the app on the freshly built `out/`.
@@ -75,47 +139,109 @@ function rebuildAndRestart(): void {
 function buildAppMenu(): void {
   // Rebuild & Restart only makes sense in dev (source present); a packaged build has
   // nothing to rebuild, so we omit the item there and leave just Quit under File.
+  const appItems: Electron.MenuItemConstructorOptions[] = [
+    { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => send(IPC.MenuCommand, 'settings') },
+    { label: 'History…', accelerator: 'CmdOrCtrl+H', click: () => send(IPC.MenuCommand, 'history') }
+  ]
   const fileItems: Electron.MenuItemConstructorOptions[] = app.isPackaged
-    ? [{ role: 'quit' }]
+    ? [...appItems, { type: 'separator' }, { role: 'quit' }]
     : [
+        ...appItems,
+        { type: 'separator' },
         {
           label: 'Rebuild & Restart',
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => rebuildAndRestart()
+          // Route through the renderer so it can warn if chats are still running;
+          // it calls back via IPC.AppRebuild once the user confirms.
+          click: () => send(IPC.MenuCommand, 'rebuild')
         },
         { type: 'separator' },
         { role: 'quit' }
       ]
+  // NOTE: we deliberately do NOT include the standard Edit/View/Window role menus. Their
+  // accelerators (Ctrl+C/V/X, Ctrl+R reload, Ctrl+Shift+R, Ctrl+W) would be captured at the
+  // native level and never reach the terminal — breaking copy/paste and interrupt in the
+  // xterm pane. Copy/paste is wired directly in the renderer (see Terminal.tsx); text inputs
+  // and the editor still get Chromium's built-in editing shortcuts without a menu entry.
   const menu = Menu.buildFromTemplate([
+    { label: 'File', submenu: fileItems },
     {
-      label: 'File',
-      submenu: fileItems
-    },
-    { role: 'editMenu' },
-    { role: 'viewMenu' },
-    { role: 'windowMenu' }
+      label: 'View',
+      submenu: [
+        {
+          label: 'Keyboard Shortcuts',
+          accelerator: 'CmdOrCtrl+/',
+          click: () => send(IPC.MenuCommand, 'shortcuts')
+        },
+        { type: 'separator' },
+        { role: 'toggleDevTools' },
+        { role: 'togglefullscreen' }
+      ]
+    }
   ])
   Menu.setApplicationMenu(menu)
 }
 
 function createWindow(): void {
+  // Restore the window to its last size/position (and maximized state) so Orbit reopens
+  // exactly where the user left it, across quits and rebuilds.
+  const saved = loadWindowState()
   win = new BrowserWindow({
-    width: 1480,
-    height: 940,
+    width: saved?.width ?? 1480,
+    height: saved?.height ?? 940,
+    x: saved?.x,
+    y: saved?.y,
     backgroundColor: '#16181d',
     title: 'Orbit',
+    icon: path.join(app.getAppPath(), 'resources', 'orbit.ico'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true
     }
   })
+  if (saved?.maximized) win.maximize()
 
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
+
+  // Lock down navigation: the renderer should only ever live at our own URL. A link in
+  // rendered markdown (or anything injected) must not be able to navigate the app window
+  // or spawn a new one — http(s) links go to the user's real browser, everything else is denied.
+  const isAppUrl = (url: string): boolean =>
+    process.env.ELECTRON_RENDERER_URL
+      ? url.startsWith(process.env.ELECTRON_RENDERER_URL)
+      : url.startsWith('file://')
+  win.webContents.on('will-navigate', (e, url) => {
+    if (isAppUrl(url)) return
+    e.preventDefault()
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+  })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
+  // getNormalBounds() is the un-maximized geometry, so maximizing/restoring doesn't lose the
+  // size to return to. Debounce the drag/resize bursts; also flush on close.
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  const persistBounds = (): void => {
+    if (!win) return
+    const b = win.getNormalBounds()
+    saveWindowState({ x: b.x, y: b.y, width: b.width, height: b.height, maximized: win.isMaximized() })
+  }
+  const queueSave = (): void => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(persistBounds, 400)
+  }
+  win.on('resize', queueSave)
+  win.on('move', queueSave)
+  win.on('maximize', persistBounds)
+  win.on('unmaximize', persistBounds)
+  win.on('close', persistBounds)
 
   win.on('closed', () => {
     win = null
@@ -129,6 +255,8 @@ function registerIpc(): void {
   })
 
   ipcMain.handle(IPC.SkillsList, (_e, projectPath: string | null) => listSkills(projectPath))
+
+  ipcMain.handle(IPC.McpList, (_e, projectPath: string | null) => listMcpServers(projectPath))
 
   ipcMain.handle(IPC.ConfigGet, () => loadConfig())
   ipcMain.handle(IPC.ConfigSet, (_e, cfg: AppConfig) => saveConfig(cfg))
@@ -147,44 +275,43 @@ function registerIpc(): void {
   ipcMain.handle(IPC.SaveTextFile, (_e, a: { path: string; content: string; baselineHash: string; force: boolean }) =>
     saveTextFile(a.path, a.content, a.baselineHash, a.force)
   )
-  // Clipboard image -> file. The terminal can't carry image bytes, so we persist the
-  // pasted image to a file and hand the CLI its path (claude reads image references by
-  // path). Returns the saved path, or null if the clipboard holds no image.
-  ipcMain.handle(
-    IPC.SaveClipboardImage,
-    (_e, arg?: { data?: ArrayBuffer; ext?: string }): string | null => {
+  // Read the OS clipboard for a paste. If it holds an image we persist it to a temp file
+  // and return its path (claude reads image references by path); otherwise we return its
+  // text. The terminal can't carry image bytes, so the path is what we type into the CLI.
+  ipcMain.handle(IPC.ClipboardRead, (): { text: string; imagePath: string | null } => {
+    const saveImage = (bytes: Buffer, ext = 'png'): string => {
       const dir = path.join(app.getPath('temp'), 'orbit-pastes')
-      const save = (bytes: Buffer, ext: string): string => {
-        fs.mkdirSync(dir, { recursive: true })
-        const clean = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
-        const file = path.join(dir, `paste-${Date.now()}.${clean}`)
-        fs.writeFileSync(file, bytes)
-        return file
-      }
-
-      // 1) Bytes handed over by the renderer (browser "copy image", copied files that
-      //    expose an image blob on the DOM paste event).
-      if (arg?.data) return save(Buffer.from(arg.data), arg.ext || 'png')
-
-      // 2) A real image FILE copied from the file manager (Windows Explorer). Reuse its
-      //    own path as-is rather than re-saving a copy.
-      try {
-        if (process.platform === 'win32' && clipboard.availableFormats().includes('FileNameW')) {
-          const p = clipboard.readBuffer('FileNameW').toString('utf16le').replace(/\0+$/, '').trim()
-          if (p && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p) && fs.existsSync(p)) return p
-        }
-      } catch {
-        /* fall through to the bitmap path */
-      }
-
-      // 3) A raw bitmap on the OS clipboard (Win+Shift+S, PrintScreen, "copy image").
-      //    This is the case the DOM paste event misses on Windows.
-      const img = clipboard.readImage()
-      if (!img.isEmpty()) return save(img.toPNG(), 'png')
-
-      return null
+      fs.mkdirSync(dir, { recursive: true })
+      const clean = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
+      const file = path.join(dir, `paste-${Date.now()}.${clean}`)
+      fs.writeFileSync(file, bytes)
+      return file
     }
-  )
+
+    // 1) An image FILE copied from Explorer — reuse its own path as-is.
+    try {
+      if (process.platform === 'win32' && clipboard.availableFormats().includes('FileNameW')) {
+        const p = clipboard.readBuffer('FileNameW').toString('utf16le').replace(/\0+$/, '').trim()
+        if (p && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p) && fs.existsSync(p)) {
+          return { text: '', imagePath: p }
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+
+    // 2) A raw bitmap on the clipboard (Win+Shift+S, PrintScreen, browser "copy image").
+    const img = clipboard.readImage()
+    if (!img.isEmpty()) return { text: '', imagePath: saveImage(img.toPNG()) }
+
+    // 3) Plain text.
+    return { text: clipboard.readText() ?? '', imagePath: null }
+  })
+
+  ipcMain.handle(IPC.ClipboardWriteText, (_e, text: string) => {
+    clipboard.writeText(text ?? '')
+    return true
+  })
 
   ipcMain.on(IPC.WatchFile, (_e, file: string) => fileWatcher?.watch(file))
   ipcMain.on(IPC.UnwatchFile, () => fileWatcher?.unwatch())
@@ -200,6 +327,21 @@ function registerIpc(): void {
   ipcMain.handle(IPC.WorkspaceLoad, () => loadWorkspace())
   ipcMain.handle(IPC.WorkspaceSave, (_e, state: WorkspaceState) => {
     saveWorkspace(state)
+    return true
+  })
+
+  ipcMain.handle(IPC.UpdateCheck, () => checkUpdate())
+  ipcMain.handle(IPC.UpdateRun, () =>
+    runUpdate((p) => win?.webContents.send(IPC.UpdateProgress, p))
+  )
+  ipcMain.handle(IPC.UpdateCloseExternal, () => closeExternalClaude())
+  ipcMain.handle(IPC.AppRelaunch, () => {
+    app.relaunch()
+    app.quit()
+    return true
+  })
+  ipcMain.handle(IPC.AppRebuild, () => {
+    rebuildAndRestart()
     return true
   })
 
@@ -221,6 +363,14 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  // On macOS, recover the login-shell PATH so a Finder-launched Orbit can find claude/node/git
+  // (no-op on Windows/Linux). Must run before we resolve/spawn anything.
+  fixGuiPath()
+  // Identify as Orbit (not generic "Electron") so Windows shows our icon/name and the
+  // taskbar groups + pins us as one app. Must match the AUMID set on the pinned shortcut
+  // (scripts/install-orbit-shortcut.ps1) and the electron-builder appId. Also enables our
+  // desktop notifications to render on Windows.
+  app.setAppUserModelId('com.shozd.orbit')
   hookServer = await startHookServer(onHookEvent)
   fileWatcher = new FileWatcher((c) => send(IPC.FileExternalChange, c))
   coordWatcher = new CoordinationWatcher(

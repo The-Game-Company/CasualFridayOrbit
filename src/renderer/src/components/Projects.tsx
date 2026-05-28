@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { EyeOffIcon } from './icons'
 import type { Project } from '../../../shared/events'
 import type { SessionState } from '../session-model'
 
@@ -11,6 +12,8 @@ interface Props {
   hidden: string[]
   onOpen: (p: Project) => void
   onContext: (path: string, x: number, y: number) => void
+  /** persist a new top-level ordering (full list of top-level project paths) */
+  onReorder: (orderedPaths: string[]) => void
 }
 
 interface ProjectStats {
@@ -20,8 +23,18 @@ interface ProjectStats {
   waiting: boolean
 }
 
-function statsFor(sessions: SessionState[], path: string): ProjectStats {
-  const mine = sessions.filter((s) => s.projectPath === path)
+/** All paths covered by a project row: itself + every nested subproject. */
+function collectPaths(p: Project): string[] {
+  const out = [p.path]
+  for (const c of p.subprojects ?? []) out.push(...collectPaths(c))
+  return out
+}
+
+/** Aggregated chat state for a project row (rolls up subprojects so a collapsed parent still
+ *  reflects activity happening inside it). */
+function statsFor(sessions: SessionState[], project: Project): ProjectStats {
+  const paths = new Set(collectPaths(project))
+  const mine = sessions.filter((s) => paths.has(s.projectPath))
   return {
     open: mine.length,
     agents: mine.reduce((n, s) => n + s.agentsActive, 0),
@@ -40,6 +53,16 @@ function countHidden(projects: Project[], hidden: Set<string>): number {
   return n
 }
 
+/** Drag-to-reorder handlers, threaded only to top-level rows. */
+interface RowDrag {
+  onStart: (path: string) => void
+  onOver: (e: React.DragEvent, path: string) => void
+  onDrop: (path: string) => void
+  onEnd: () => void
+  hint: 'before' | 'after' | null
+  dragging: boolean
+}
+
 interface RowProps {
   p: Project
   depth: number
@@ -50,6 +73,7 @@ interface RowProps {
   showHidden: boolean
   onOpen: (p: Project) => void
   onContext: (path: string, x: number, y: number) => void
+  drag?: RowDrag
 }
 
 function ProjectRow({
@@ -61,18 +85,28 @@ function ProjectRow({
   hidden,
   showHidden,
   onOpen,
-  onContext
+  onContext,
+  drag
 }: RowProps): JSX.Element | null {
   const [open, setOpen] = useState(true)
   const isHidden = hidden.has(p.path)
   if (isHidden && !showHidden) return null
-  const st = statsFor(sessions, p.path)
+  const st = statsFor(sessions, p)
   const hasSubs = !!p.subprojects?.length
+  // one obvious state per row: busy > waiting > open > idle
+  const state = st.busy ? 'busy' : st.waiting ? 'waiting' : st.open > 0 ? 'open' : 'idle'
   return (
     <>
       <li
-        className={`project ${p.path === activeProject ? 'active' : ''} ${st.busy ? 'busy' : ''} ${
-          isHidden ? 'hidden-proj' : ''
+        draggable={!!drag}
+        onDragStart={drag ? () => drag.onStart(p.path) : undefined}
+        onDragOver={drag ? (e) => drag.onOver(e, p.path) : undefined}
+        onDrop={drag ? () => drag.onDrop(p.path) : undefined}
+        onDragEnd={drag ? () => drag.onEnd() : undefined}
+        className={`project ${depth > 0 ? 'subproject' : ''} state-${state} ${
+          p.path === activeProject ? 'active' : ''
+        } ${isHidden ? 'hidden-proj' : ''} ${drag?.dragging ? 'dragging' : ''} ${
+          drag?.hint === 'before' ? 'drop-before' : drag?.hint === 'after' ? 'drop-after' : ''
         }`}
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => onOpen(p)}
@@ -88,18 +122,26 @@ function ProjectRow({
               : p.path
         }
       >
-        {hasSubs ? (
+        <span className="project-caret-slot">
+          {hasSubs && (
+            <span
+              className="project-caret"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen((o) => !o)
+              }}
+            >
+              {open ? '▾' : '▸'}
+            </span>
+          )}
+        </span>
+        {state !== 'idle' && (
           <span
-            className="project-caret"
-            onClick={(e) => {
-              e.stopPropagation()
-              setOpen((o) => !o)
-            }}
-          >
-            {open ? '▾' : '▸'}
-          </span>
-        ) : (
-          <span className={`project-dot ${st.busy ? 'busy' : st.open > 0 ? 'open' : ''}`} />
+            className={`project-dot ${state}`}
+            title={
+              state === 'busy' ? 'working' : state === 'waiting' ? 'waiting for you' : 'open (idle)'
+            }
+          />
         )}
         <span className="project-name">{p.name}</span>
         {st.agents > 0 && (
@@ -107,7 +149,11 @@ function ProjectRow({
             ⬡ {st.agents}
           </span>
         )}
-        {st.open > 0 && <span className="open-count" title={`${st.open} open session(s)`}>{st.open}</span>}
+        {st.open > 0 && (
+          <span className={`open-count state-${state}`} title={`${st.open} open session(s)`}>
+            {st.open}
+          </span>
+        )}
         {isHidden && <span className="proj-hidden" title="hidden">🚫</span>}
         {excluded.has(p.path) && <span className="proj-norestore" title="starts empty on launch">∅</span>}
         {st.waiting && <span className="unseen-dot" title="a session here is waiting for you" />}
@@ -140,12 +186,46 @@ export function Projects({
   restoreExclude,
   hidden,
   onOpen,
-  onContext
+  onContext,
+  onReorder
 }: Props): JSX.Element {
   const [showHidden, setShowHidden] = useState(false)
+  const [dragPath, setDragPath] = useState<string | null>(null)
+  const [over, setOver] = useState<{ path: string; after: boolean } | null>(null)
   const excluded = new Set(restoreExclude)
   const hiddenSet = new Set(hidden)
   const hiddenCount = countHidden(projects, hiddenSet)
+
+  const topPaths = projects.map((p) => p.path)
+  const commitDrop = (targetPath: string): void => {
+    if (dragPath && over && dragPath !== targetPath) {
+      const order = topPaths.filter((p) => p !== dragPath)
+      let i = order.indexOf(over.path)
+      if (i < 0) i = order.length
+      else if (over.after) i += 1
+      order.splice(i, 0, dragPath)
+      onReorder(order)
+    }
+    setDragPath(null)
+    setOver(null)
+  }
+  const drag = (path: string): RowDrag => ({
+    onStart: () => setDragPath(path),
+    onOver: (e, target) => {
+      if (!dragPath) return
+      e.preventDefault()
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      setOver({ path: target, after: e.clientY > r.top + r.height / 2 })
+    },
+    onDrop: (target) => commitDrop(target),
+    onEnd: () => {
+      setDragPath(null)
+      setOver(null)
+    },
+    hint: dragPath && over?.path === path && dragPath !== path ? (over.after ? 'after' : 'before') : null,
+    dragging: dragPath === path
+  })
+
   return (
     <div className="panel projects">
       <div className="panel-head">
@@ -156,7 +236,13 @@ export function Projects({
             title={showHidden ? 'hide hidden projects' : 'show hidden projects'}
             onClick={() => setShowHidden((s) => !s)}
           >
-            {showHidden ? '👁 hiding' : `🚫 ${hiddenCount} hidden`}
+            {showHidden ? (
+              '👁 hiding'
+            ) : (
+              <>
+                <EyeOffIcon /> {hiddenCount} hidden
+              </>
+            )}
           </span>
         ) : (
           <span className="panel-head-sub" title={root}>
@@ -177,6 +263,7 @@ export function Projects({
             showHidden={showHidden}
             onOpen={onOpen}
             onContext={onContext}
+            drag={drag(p.path)}
           />
         ))}
         {projects.length === 0 && <li className="project muted">no folders found</li>}

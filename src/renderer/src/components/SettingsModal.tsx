@@ -1,10 +1,8 @@
 import type { AppConfig, ThemeName } from '../../../shared/events'
+import { THEME_LIST } from '../themes'
 
-const THEME_LABELS: Record<ThemeName, string> = {
-  'tokyo-night': 'Tokyo Night',
-  'github-dark': 'GitHub Dark',
-  gruvbox: 'Gruvbox'
-}
+const DARK_THEMES = THEME_LIST.filter((t) => t.appearance === 'dark')
+const LIGHT_THEMES = THEME_LIST.filter((t) => t.appearance === 'light')
 
 interface Props {
   config: AppConfig
@@ -43,11 +41,20 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
               value={config.theme}
               onChange={(e) => onChange({ ...config, theme: e.target.value as ThemeName })}
             >
-              {(Object.keys(THEME_LABELS) as ThemeName[]).map((t) => (
-                <option key={t} value={t}>
-                  {THEME_LABELS[t]}
-                </option>
-              ))}
+              <optgroup label="Dark">
+                {DARK_THEMES.map((t) => (
+                  <option key={t.name} value={t.name}>
+                    {t.label}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Light">
+                {LIGHT_THEMES.map((t) => (
+                  <option key={t.name} value={t.name}>
+                    {t.label}
+                  </option>
+                ))}
+              </optgroup>
             </select>
           </label>
 
@@ -72,6 +79,19 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
           </label>
           <div className="field-hint">
             Right-click a project to make just that one start empty.
+          </div>
+
+          <label className="field-check">
+            <input
+              type="checkbox"
+              checked={config.autoFocus}
+              onChange={(e) => onChange({ ...config, autoFocus: e.target.checked })}
+            />
+            <span>Auto-focus sessions that finish</span>
+          </label>
+          <div className="field-hint">
+            While the session you're watching is busy, jump to another window the moment it
+            finishes and wants your input.
           </div>
 
           <label className="field">

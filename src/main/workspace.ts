@@ -7,6 +7,42 @@ function workspacePath(): string {
   return path.join(app.getPath('userData'), 'workspace.json')
 }
 
+function windowStatePath(): string {
+  return path.join(app.getPath('userData'), 'window-state.json')
+}
+
+/** OS window geometry we restore on next launch so the app reopens where the user left it. */
+export interface WindowState {
+  x?: number
+  y?: number
+  width: number
+  height: number
+  maximized: boolean
+}
+
+export function loadWindowState(): WindowState | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(windowStatePath(), 'utf8'))
+    if (parsed && typeof parsed.width === 'number' && typeof parsed.height === 'number') {
+      return parsed as WindowState
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function saveWindowState(state: WindowState): void {
+  const target = windowStatePath()
+  const tmp = target + '.tmp'
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
+    fs.renameSync(tmp, target)
+  } catch {
+    /* best effort */
+  }
+}
+
 export function loadWorkspace(): WorkspaceState | null {
   try {
     const raw = fs.readFileSync(workspacePath(), 'utf8')

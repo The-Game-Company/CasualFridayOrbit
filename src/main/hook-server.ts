@@ -37,6 +37,7 @@ export function startHookServer(onEvent: (evt: HookEvent) => void): Promise<Hook
             onEvent({
               sessionId: String(parsed.sessionId ?? ''),
               event: String(parsed.event ?? 'unknown'),
+              effort: parsed.effort ? String(parsed.effort) : undefined,
               ts: parsed.ts ?? Date.now(),
               data: parsed.data
             })

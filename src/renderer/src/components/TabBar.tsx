@@ -1,26 +1,34 @@
 import { useState } from 'react'
 import type { TermKind } from '../../../shared/events'
-import type { SessionState } from '../session-model'
-import { KIND_META } from '../kind-meta'
+import { tabWindows, type SessionState, type SessionStatus, type Tab } from '../session-model'
+import { KIND_META, newTabKinds } from '../kind-meta'
 import { AgentBadge, StatusDot, UnseenDot } from './indicators'
 
 interface Props {
+  /** tabs for the active project (each owns >=1 window) */
+  tabs: Tab[]
+  /** all sessions, so we can look up each tab's windows */
   sessions: SessionState[]
-  activeId: string | null
-  /** sessions pinned into the project's split grid (marked with a 'split' class) */
-  split: string[]
+  activeTabId: string | null
   startedIds: Set<string>
-  onSelect: (id: string) => void
-  onClose: (id: string) => void
+  onSelect: (tabId: string) => void
+  onClose: (tabId: string) => void
   onNew: (kind: TermKind) => void
-  onContext: (id: string, x: number, y: number) => void
+  onContext: (tabId: string, x: number, y: number) => void
   canNew: boolean
 }
 
+/** Roll a tab's windows up into one status: busy beats waiting beats idle. */
+function tabStatus(wins: SessionState[]): SessionStatus {
+  if (wins.some((w) => w.status === 'busy')) return 'busy'
+  if (wins.some((w) => w.status === 'waiting')) return 'waiting'
+  return 'idle'
+}
+
 export function TabBar({
+  tabs,
   sessions,
-  activeId,
-  split,
+  activeTabId,
   startedIds,
   onSelect,
   onClose,
@@ -28,63 +36,84 @@ export function TabBar({
   onContext,
   canNew
 }: Props): JSX.Element {
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const byId = new Map(sessions.map((s) => [s.id, s]))
 
   const pick = (kind: TermKind): void => {
-    setMenuOpen(false)
+    setMenu(null)
     onNew(kind)
   }
 
   return (
     <div className="tabbar">
-      {sessions.map((s) => {
-        const paused = !startedIds.has(s.id)
+      {tabs.map((t) => {
+        const ids = tabWindows(t)
+        const wins = ids.map((id) => byId.get(id)).filter((s): s is SessionState => !!s)
+        if (!wins.length) return null
+        const head = byId.get(t.activeWindow) ?? wins[0]
+        const status = tabStatus(wins)
+        const agents = wins.reduce((n, w) => n + w.agentsActive, 0)
+        const skill = wins.find((w) => w.activeSkill)?.activeSkill ?? null
+        const unseen = wins.some((w) => w.unseen)
+        const count = wins.length
+        // a tab is "paused" (lazy-resume) until at least one of its windows has spawned
+        const paused = !ids.some((id) => startedIds.has(id))
         return (
-        <div
-          key={s.id}
-          className={`tab ${s.id === activeId ? 'active' : ''} ${split.includes(s.id) ? 'split' : ''} ${paused ? 'paused' : ''}`}
-          onClick={() => onSelect(s.id)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            onContext(s.id, e.clientX, e.clientY)
-          }}
-          title={
-            paused
-              ? `${s.title} — paused, click to resume`
-              : split.includes(s.id)
-                ? `${s.title} — pinned in split · right-click to remove`
-                : `${s.title} — right-click to add to split`
-          }
-        >
-          <span className="tab-kind">{paused ? '⏸' : KIND_META[s.kind].icon}</span>
-          <StatusDot status={s.status} />
-          <span className="tab-title">{s.title}</span>
-          <AgentBadge n={s.agentsActive} />
-          {s.unseen && s.id !== activeId && <UnseenDot />}
-          <button
-            className="tab-close"
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose(s.id)
+          <div
+            key={t.id}
+            className={`tab ${t.id === activeTabId ? 'active' : ''} ${count > 1 ? 'split' : ''} ${paused ? 'paused' : ''} ${skill ? 'skill' : ''}`}
+            onClick={() => onSelect(t.id)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              onContext(t.id, e.clientX, e.clientY)
             }}
-            title="Close session"
+            title={
+              paused
+                ? `${head.title} — paused, click to resume`
+                : count > 1
+                  ? `${head.title} — ${count} windows · right-click for options`
+                  : `${head.title} — right-click for options`
+            }
           >
-            ✕
-          </button>
-        </div>
+            <span className="tab-kind">{paused ? '⏸' : KIND_META[head.kind].icon}</span>
+            <StatusDot status={status} />
+            <span className="tab-title">{head.title}</span>
+            {skill && <span className="tab-skill" title={`running skill: ${skill}`}>✦</span>}
+            {count > 1 && <span className="tab-count" title={`${count} windows`}>⊞{count}</span>}
+            <AgentBadge n={agents} />
+            {unseen && t.id !== activeTabId && <UnseenDot />}
+            <button
+              className="tab-close"
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose(t.id)
+              }}
+              title={count > 1 ? `Close tab (${count} windows)` : 'Close tab'}
+            >
+              ✕
+            </button>
+          </div>
         )
       })}
 
       {canNew && (
         <div className="tab-new-wrap">
-          <button className="tab-new" onClick={() => setMenuOpen((o) => !o)} title="New terminal">
+          <button
+            className="tab-new"
+            onClick={(e) => {
+              if (menu) return setMenu(null)
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              setMenu({ x: r.left, y: r.bottom + 4 })
+            }}
+            title="New tab"
+          >
             ＋
           </button>
-          {menuOpen && (
+          {menu && (
             <>
-              <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
-              <div className="dropdown">
-                {(Object.keys(KIND_META) as TermKind[]).map((k) => (
+              <div className="menu-backdrop" onClick={() => setMenu(null)} />
+              <div className="dropdown" style={{ position: 'fixed', top: menu.y, left: menu.x }}>
+                {newTabKinds(window.orbit.platform).map((k) => (
                   <div key={k} className="dropdown-item" onClick={() => pick(k)}>
                     <span className="dropdown-icon">{KIND_META[k].icon}</span>
                     {KIND_META[k].label}
@@ -95,7 +124,7 @@ export function TabBar({
           )}
         </div>
       )}
-      {sessions.length === 0 && <span className="tab-hint">no sessions — pick a project on the left</span>}
+      {tabs.length === 0 && <span className="tab-hint">no sessions — pick a project on the left</span>}
     </div>
   )
 }

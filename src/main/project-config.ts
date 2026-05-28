@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import type { ShellKind } from '../shared/events'
 
 /**
  * How Orbit should read a project's coordination state. A project can override any of
@@ -30,8 +31,10 @@ export interface CoordAdapter {
 export interface OrbitCommand {
   label: string
   run: string
-  shell?: 'powershell' | 'cmd'
+  shell?: ShellKind
 }
+
+const SHELL_KINDS: ReadonlySet<ShellKind> = new Set(['powershell', 'cmd', 'zsh', 'bash'])
 
 export interface SubProjectDecl {
   name: string
@@ -97,7 +100,13 @@ export function readProjectConfig(projectPath: string): ProjectConfig {
   const commands: OrbitCommand[] = Array.isArray(raw.commands)
     ? raw.commands
         .filter((c: any) => c && typeof c.label === 'string' && typeof c.run === 'string')
-        .map((c: any) => ({ label: c.label, run: c.run, shell: c.shell === 'cmd' ? 'cmd' : 'powershell' }))
+        // Keep an explicitly declared shell only if it's one we know; otherwise leave it
+        // unset so the renderer can pick the host platform's default shell at runtime.
+        .map((c: any) => ({
+          label: c.label,
+          run: c.run,
+          ...(SHELL_KINDS.has(c.shell) ? { shell: c.shell as ShellKind } : {})
+        }))
     : []
   const accent = typeof raw.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw.accent) ? raw.accent : null
   const docs = Array.isArray(raw.docs) ? raw.docs.filter((x: unknown) => typeof x === 'string') : null

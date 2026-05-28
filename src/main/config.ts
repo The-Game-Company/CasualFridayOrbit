@@ -16,8 +16,12 @@ export function loadConfig(): AppConfig {
     restoreOnLaunch: true,
     restoreExclude: [],
     hidden: [],
+    projectOrder: [],
     logDirs: ['PlayLogs', 'logs', 'Logs'],
-    leaseStaleMin: 20
+    leaseStaleMin: 20,
+    leftWidth: 230,
+    rightWidth: 340,
+    autoFocus: false
   }
   try {
     const raw = fs.readFileSync(configPath(), 'utf8')

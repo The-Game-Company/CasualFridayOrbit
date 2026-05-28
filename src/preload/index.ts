@@ -11,20 +11,29 @@ import {
   type HookEvent,
   type KeyDoc,
   type LogState,
+  type McpServer,
   type Project,
   type ProjectInfo,
   type ReadFileResult,
   type SaveResult,
   type Skill,
+  type UpdateProgress,
+  type UpdateResult,
+  type UpdateStatus,
   type WorkspaceState
 } from '../shared/events'
 
 const api = {
+  /** Host platform, so the renderer can offer the right shells (powershell/cmd vs zsh/bash). */
+  platform: process.platform,
+
   // queries
   listProjects: (): Promise<{ root: string; projects: Project[] }> =>
     ipcRenderer.invoke(IPC.ProjectList),
   listSkills: (projectPath: string | null): Promise<Skill[]> =>
     ipcRenderer.invoke(IPC.SkillsList, projectPath),
+  listMcp: (projectPath: string | null): Promise<McpServer[]> =>
+    ipcRenderer.invoke(IPC.McpList, projectPath),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigGet),
   setConfig: (cfg: AppConfig): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigSet, cfg),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.PickFolder),
@@ -34,6 +43,18 @@ const api = {
   loadWorkspace: (): Promise<WorkspaceState | null> => ipcRenderer.invoke(IPC.WorkspaceLoad),
   saveWorkspace: (state: WorkspaceState): Promise<boolean> =>
     ipcRenderer.invoke(IPC.WorkspaceSave, state),
+
+  // Claude Code self-update (checked at launch, before any session locks the binary)
+  checkUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.UpdateCheck),
+  runUpdate: (): Promise<UpdateResult> => ipcRenderer.invoke(IPC.UpdateRun),
+  onUpdateProgress: (cb: (p: UpdateProgress) => void): (() => void) => {
+    const fn = (_e: unknown, p: UpdateProgress): void => cb(p)
+    ipcRenderer.on(IPC.UpdateProgress, fn)
+    return () => ipcRenderer.removeListener(IPC.UpdateProgress, fn)
+  },
+  closeExternalClaude: (): Promise<number> => ipcRenderer.invoke(IPC.UpdateCloseExternal),
+  relaunchApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.AppRelaunch),
+  rebuildApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.AppRebuild),
 
   // file browser + editor
   readDir: (dir: string): Promise<FileNode[]> => ipcRenderer.invoke(IPC.ReadDir, dir),
@@ -45,8 +66,10 @@ const api = {
     force: boolean
   ): Promise<SaveResult> =>
     ipcRenderer.invoke(IPC.SaveTextFile, { path, content, baselineHash, force }),
-  saveClipboardImage: (data?: ArrayBuffer, ext?: string): Promise<string | null> =>
-    ipcRenderer.invoke(IPC.SaveClipboardImage, data ? { data, ext } : undefined),
+  clipboardRead: (): Promise<{ text: string; imagePath: string | null }> =>
+    ipcRenderer.invoke(IPC.ClipboardRead),
+  clipboardWriteText: (text: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.ClipboardWriteText, text),
   watchFile: (path: string): void => ipcRenderer.send(IPC.WatchFile, path),
   unwatchFile: (): void => ipcRenderer.send(IPC.UnwatchFile),
   onFileExternalChange: (cb: (c: ExternalChange) => void): (() => void) => {
@@ -95,6 +118,11 @@ const api = {
     const fn = (_e: unknown, p: { sessionId: string; code: number }): void => cb(p.sessionId, p.code)
     ipcRenderer.on(IPC.SessionExit, fn)
     return () => ipcRenderer.removeListener(IPC.SessionExit, fn)
+  },
+  onMenuCommand: (cb: (command: string) => void): (() => void) => {
+    const fn = (_e: unknown, command: string): void => cb(command)
+    ipcRenderer.on(IPC.MenuCommand, fn)
+    return () => ipcRenderer.removeListener(IPC.MenuCommand, fn)
   },
   onHookEvent: (cb: (evt: HookEvent) => void): (() => void) => {
     const fn = (_e: unknown, evt: HookEvent): void => cb(evt)
