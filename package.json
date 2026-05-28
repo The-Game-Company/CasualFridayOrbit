@@ -40,7 +40,8 @@
         "zip"
       ],
       "icon": "resources/orbit.icns",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": null
     }
   },
   "devDependencies": {

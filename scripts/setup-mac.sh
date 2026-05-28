@@ -112,6 +112,12 @@ install_to_applications() {
   local app
   app="$(/usr/bin/find dist -maxdepth 4 -name 'Orbit.app' -type d 2>/dev/null | head -n1)"
   [ -n "$app" ] || die "Build finished but Orbit.app wasn't found under dist/."
+  # electron-builder skips signing (identity:null) because its codesign run aborts on
+  # extended-attribute "detritus". Strip the xattrs ourselves, then apply a clean ad-hoc
+  # signature — all an Apple-Silicon app needs to launch locally.
+  info "Signing the app for local use…"
+  xattr -cr "$app" 2>/dev/null || true
+  codesign --force --deep --sign - "$app" 2>/dev/null || warn "Ad-hoc signing skipped (app may still run)."
   info "Installing to /Applications…"
   rm -rf "/Applications/Orbit.app"
   if ! cp -R "$app" "/Applications/Orbit.app" 2>/dev/null; then
