@@ -1,8 +1,75 @@
-# Orbit
+<div align="center">
 
-A local desktop **wrapper around the Claude Code CLI**. It runs your already-installed,
-already-logged-in `claude.exe` behind the scenes — **no API key**, no separate auth — and
-wraps it in a reactive, multi-session shell.
+# ◆ Orbit
+
+**A local desktop wrapper around the Claude Code CLI.**
+
+Run your already-installed, already-logged-in `claude` behind a reactive, multi-session UI —
+**no API key, no separate auth.** If you're logged in, Orbit uses your subscription.
+
+![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2b6cb0)
+![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![license](https://img.shields.io/badge/license-MIT-3fb950)
+
+</div>
+
+---
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Per-project config (`.orbit.json`)](#per-project-config-orbitjson)
+- [Project layout](#project-layout)
+- [Notes & limitations](#notes--limitations)
+
+---
+
+## Quick start
+
+> [!NOTE]
+> Orbit drives your **logged-in** `claude`. After installing the CLI, run `claude` once and
+> sign in with your subscription (no API key). The setup scripts below install it for you if
+> it's missing.
+
+### One-shot setup
+
+Installs Node + the Claude Code CLI if missing, installs dependencies, then runs or builds.
+
+**macOS** (Apple Silicon or Intel):
+
+```bash
+./scripts/setup-mac.sh          # set up, then launch dev
+./scripts/setup-mac.sh --dmg    # set up, then build a .dmg / .zip
+```
+
+**Windows**:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1             # set up, then launch dev
+pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -Installer  # set up, then NSIS installer
+```
+
+### Manual
+
+```bash
+npm install
+npm run dev               # dev server + hot reload
+npm run dist              # package an unpacked app   → dist/
+npm run dist:installer    # Windows: NSIS .exe  ·  macOS: .dmg + .zip
+```
+
+> [!TIP]
+> If `npm run dev` fails with `Error: Electron uninstall`, the Electron binary didn't
+> download during install — run `node ./node_modules/electron/install.js`.
+
+> [!IMPORTANT]
+> macOS builds are unsigned. On first launch, right-click the app → **Open**
+> (or `xattr -dr com.apple.quarantine Orbit.app`).
+
+---
 
 ## Features
 
@@ -69,6 +136,8 @@ wraps it in a reactive, multi-session shell.
   `--continue`, clear, font size), and **persisted settings** (projects folder w/ picker,
   theme, font size).
 
+---
+
 ## How it works
 
 ```
@@ -98,11 +167,14 @@ Three independent signal sources:
    "waiting for you" state.
 3. **Context files** — one `chokidar` watch per session; independent of the CLI.
 
-**No-API-key guarantee:** we spawn the real `claude.exe` with your normal environment and
-deliberately `delete env.ANTHROPIC_API_KEY`. If you're logged in, it uses your
-subscription. We never use `--bare` (the only mode that ignores your OAuth login).
+> [!NOTE]
+> **No-API-key guarantee:** Orbit spawns the real `claude` with your normal environment and
+> deliberately `delete`s `ANTHROPIC_API_KEY`. If you're logged in, it uses your subscription.
+> It never uses `--bare` (the only mode that ignores your OAuth login).
 
-## Per-project config (`.orbit.json`) — coordination is adapter-driven
+---
+
+## Per-project config (`.orbit.json`)
 
 Orbit's collision detection has two tiers:
 
@@ -120,47 +192,14 @@ Drop a `.orbit.json` at a project root to declare your layout — see
 [`orbit.example.json`](orbit.example.json) for every field. Beyond coordination, the
 same manifest also drives:
 
-- **`commands`** — quick buttons in the command bar; each opens a shell session running the
-  command (e.g. `pwsh -File tools/leases.ps1 list`, tail newest log, a repo's verify cmd).
-- **`subprojects`** — monorepo members shown nested in the Projects panel, each a full
-  project with its own context/COORD/config. Auto-detected from a `*.code-workspace` if
-  omitted.
-- **`accent`** — a hex color that color-codes the project across its tabs/UI.
-- **`docs`** — the exact always-on docs for the pinned-docs strip.
+| Field | What it does |
+| --- | --- |
+| `commands` | Quick buttons in the command bar; each opens a shell session running the command (e.g. tail newest log, a repo's verify cmd). |
+| `subprojects` | Monorepo members shown nested in the Projects panel, each a full project with its own context/COORD/config. Auto-detected from a `*.code-workspace` if omitted. |
+| `accent` | A hex color that color-codes the project across its tabs/UI. |
+| `docs` | The exact always-on docs for the pinned-docs strip. |
 
-## Run it
-
-**Quick setup** (installs Node + the Claude Code CLI if missing, then deps, then runs/builds):
-
-```bash
-# macOS (Apple Silicon or Intel)
-scripts/setup-mac.sh            # set up + launch dev
-scripts/setup-mac.sh --dmg      # set up + build a .dmg / .zip
-```
-
-```powershell
-# Windows
-pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1             # set up + launch dev
-pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -Installer  # set up + NSIS installer
-```
-
-**Manual:**
-
-```bash
-npm install
-npm run dev               # dev server + hot reload
-# package a distributable:
-npm run dist              # unpacked app  (dist/)
-npm run dist:installer    # Windows: NSIS .exe · macOS: .dmg + .zip
-```
-
-> Orbit drives your **logged-in** `claude`, so after install run `claude` once and sign in
-> with your subscription (no API key). macOS builds aren't code-signed; on first launch
-> right-click the app → **Open**.
-
-> **First-install gotcha:** if `npm run dev` fails with `Error: Electron uninstall`, the
-> Electron binary didn't download during install. Fix:
-> `node .\node_modules\electron\install.js`
+---
 
 ## Project layout
 
@@ -169,7 +208,8 @@ src/
   main/
     index.ts            app lifecycle, window, IPC, desktop notifications
     session-manager.ts  owns N sessions (PTY + context watcher each)
-    pty.ts              resolve claude.exe + spawn it in a PTY (per session)
+    pty.ts              resolve the claude binary + spawn it in a PTY (per session)
+    shell-path.ts       recover the login-shell PATH for Finder-launched apps (macOS)
     hook-server.ts      localhost server receiving hook events (tagged by session)
     settings-inject.ts  temp settings.json + hook-forwarder.cjs
     context-watch.ts    chokidar watch of context files
@@ -180,6 +220,7 @@ src/
     files.ts            file browser IO + hash-based save + single-file disk watcher
     coordination.ts     parse/watch .claude/leases + WIP.md + takeovers.log; lease↔path match
     logs.ts             newest-log tailer + key-doc (pinned docs) listing
+    updater.ts          check/run Claude Code self-update (winget / npm)
     config.ts           persisted settings (userData/config.json)
   preload/index.ts      contextBridge API (window.orbit.*)
   renderer/src/
@@ -189,9 +230,15 @@ src/
     components/         Terminal, TabBar, Toolbar, Projects, SkillsPanel, ContextPanel,
                          FileTree, EditorModal, HistoryModal, Activity, SettingsModal, indicators
   shared/events.ts      shared types + IPC channel names
+scripts/
+  setup-mac.sh          one-shot macOS setup (Node + Claude Code + deps + run/build)
+  setup-windows.ps1     one-shot Windows setup (same)
+  gen-icon.mjs          generate orbit.ico / .png / .icns from code
 ```
 
-## Known limitations / to verify live
+---
+
+## Notes & limitations
 
 - `--resume` fails gracefully: if a transcript was deleted, claude prints an error in that
   pane; just restart it fresh.
