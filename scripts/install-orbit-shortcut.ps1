@@ -9,8 +9,10 @@
 
   By default it launches electron.exe directly on the built app (fast, no console window). Use
   -BuildFirst to point it at launch.cmd instead, which rebuilds before launching.
+
+  By default the shortcut lands in the Start Menu; pass -Desktop to put it on the Desktop too.
 #>
-param([switch]$BuildFirst)
+param([switch]$BuildFirst, [switch]$Desktop)
 
 $ErrorActionPreference = 'Stop'
 $repo     = Split-Path $PSScriptRoot -Parent
@@ -18,7 +20,9 @@ $electron = Join-Path $repo 'node_modules\electron\dist\electron.exe'
 $icon     = Join-Path $repo 'resources\orbit.ico'
 $launch   = Join-Path $repo 'launch.cmd'
 $aumid    = 'com.shozd.orbit'
-$lnk      = Join-Path ([Environment]::GetFolderPath('Programs')) 'Orbit.lnk'
+# Land on the Desktop when asked, otherwise the per-user Start Menu Programs folder.
+$lnkFolder = if ($Desktop) { [Environment]::GetFolderPath('Desktop') } else { [Environment]::GetFolderPath('Programs') }
+$lnk      = Join-Path $lnkFolder 'Orbit.lnk'
 
 if (-not (Test-Path $electron)) { throw "electron.exe not found at $electron - run npm install first." }
 if (-not (Test-Path $icon))     { throw "icon not found at $icon - run: node scripts/gen-icon.mjs" }

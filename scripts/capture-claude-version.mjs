@@ -18,9 +18,11 @@ const verOf = (s) => (s.match(/(\d+\.\d+\.\d+)/) ?? [])[1] ?? null
 function probeClaudeVersion() {
   // Try a couple of resolution strategies; `claude` may be a shim on PATH or a .cmd on Windows.
   const candidates = process.platform === 'win32' ? ['claude.cmd', 'claude'] : ['claude']
+  // On Windows a .cmd shim isn't directly executable by CreateProcess, so run it through a shell.
+  const win = process.platform === 'win32'
   for (const bin of candidates) {
     try {
-      const out = execFileSync(bin, ['--version'], { encoding: 'utf8', timeout: 15_000 })
+      const out = execFileSync(bin, ['--version'], { encoding: 'utf8', timeout: 15_000, shell: win })
       const v = verOf(out)
       if (v) return v
     } catch {

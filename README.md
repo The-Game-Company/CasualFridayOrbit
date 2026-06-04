@@ -41,6 +41,14 @@ installs everything (Node, the Claude Code CLI, dependencies), builds Orbit, and
 your **Applications and Dock** — like any normal Mac app. Then open Terminal once, run
 `claude`, and sign in (no API key).
 
+### Windows — easiest (no commands)
+
+After cloning, **double-click `Install Orbit (Windows).cmd`** in the project folder. It installs
+everything (Node, the Claude Code CLI, dependencies), builds Orbit, and adds **Desktop and Start
+Menu** shortcuts — then opens it. You'll only see a Windows administrator prompt if Node has to be
+installed. The first time, run `claude` once (or sign in from Orbit's terminal pane) with your
+subscription (no API key).
+
 ### One-shot setup (from a terminal)
 
 Installs Node + the Claude Code CLI if missing, installs dependencies, then runs or builds.

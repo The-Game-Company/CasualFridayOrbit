@@ -55,6 +55,11 @@ export function resolveClaudePath(): string {
   const exe = process.platform === 'win32' ? 'claude.exe' : 'claude'
   const onPath = findOnPath(exe)
   if (onPath) return onPath
+  // npm's global install ships only shims (claude.cmd/.ps1), no claude.exe — pick up the .cmd.
+  if (process.platform === 'win32') {
+    const cmdOnPath = findOnPath('claude.cmd')
+    if (cmdOnPath) return cmdOnPath
+  }
   // PATH can be missing the real install dir — notably on macOS, where an app launched from
   // Finder inherits only a minimal PATH (see shell-path.ts). Probe the known install locations.
   const fallbacks = [
@@ -63,6 +68,8 @@ export function resolveClaudePath(): string {
       'AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe',
       'claude.exe'
     ),
+    // npm global shim location ($APPDATA\npm\claude.cmd) when it isn't on PATH.
+    path.join(process.env.APPDATA || '', 'npm', 'claude.cmd'),
     path.join(os.homedir(), '.local', 'bin', exe),
     '/opt/homebrew/bin/claude', // Apple Silicon Homebrew
     '/usr/local/bin/claude' // Intel Homebrew / common /usr/local install
@@ -123,6 +130,11 @@ export class PtySession {
       args = ['--settings', this.injected.settingsPath]
       if (opts.resumeId) args.push('--resume', opts.resumeId)
       else if (opts.continueLast) args.push('--continue')
+      // ConPTY's CreateProcess can't exec a .cmd/.bat directly — run it through the interpreter.
+      if (/\.(cmd|bat)$/i.test(file)) {
+        args = ['/c', file, ...args]
+        file = process.env.ComSpec || 'cmd.exe'
+      }
       env.ORBIT_HOOK_PORT = String(opts.hookPort)
       env.ORBIT_HOOK_TOKEN = opts.hookToken
       env.ORBIT_SESSION_ID = opts.sessionId
