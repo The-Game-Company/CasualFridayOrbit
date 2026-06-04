@@ -37,6 +37,7 @@ import { SubAgents } from './components/SubAgents'
 import { SkillHud } from './components/SkillHud'
 import { DocsStrip } from './components/DocsStrip'
 import { CommandBar } from './components/CommandBar'
+import { HelpPopup } from './components/HelpPopup'
 import { Activity } from './components/Activity'
 import { EyeOffIcon } from './components/icons'
 import { KIND_META, defaultShellKind } from './kind-meta'
@@ -1200,6 +1201,29 @@ export default function App(): JSX.Element {
               <button className={`rt ${rightView === 'logs' ? 'on' : ''}`} onClick={() => setRightView('logs')}>
                 LOGS
               </button>
+              <span className="rt-help">
+                {rightView === 'coord' && (
+                  <HelpPopup
+                    title="Coordination"
+                    snippet={
+                      '{\n  "coordination": {\n    "leaseDir": ".claude/leases",\n    "wipFile": "WIP.md",\n    "wipSection": "Active"\n  }\n}'
+                    }
+                  >
+                    Reads agent leases from <code>.claude/leases/*.lease.json</code>, the{' '}
+                    <code>WIP.md</code> Active section, and a takeovers log — all overridable via{' '}
+                    <code>.orbit.json</code> <code>coordination</code>.
+                  </HelpPopup>
+                )}
+                {rightView === 'logs' && (
+                  <HelpPopup
+                    title="Logs"
+                    snippet={'{\n  "logDirs": ["PlayLogs", "logs", "Logs"]\n}'}
+                  >
+                    Scans <code>logDirs</code> for the newest <code>*.log</code> file; uses the global
+                    default from settings unless a project overrides it via <code>.orbit.json</code>.
+                  </HelpPopup>
+                )}
+              </span>
             </div>
             {(rightView === 'context' || rightView === 'files') && (
               <DocsStrip docs={keyDocs} onOpen={setEditorPath} />

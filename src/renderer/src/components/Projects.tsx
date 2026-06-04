@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { EyeOffIcon } from './icons'
+import { HelpPopup } from './HelpPopup'
 import type { Project } from '../../../shared/events'
 import type { SessionState } from '../session-model'
 
@@ -229,7 +230,16 @@ export function Projects({
   return (
     <div className="panel projects">
       <div className="panel-head">
-        <span>PROJECTS</span>
+        <span className="panel-head-titled">
+          PROJECTS
+          <HelpPopup
+            title="Subprojects"
+            snippet={'{\n  "subprojects": [\n    { "name": "backend", "path": "app" }\n  ]\n}'}
+          >
+            Monorepo members are detected from <code>.orbit.json</code> <code>subprojects</code> or a{' '}
+            <code>.code-workspace</code> in the project folder, and hot-reload when that file changes.
+          </HelpPopup>
+        </span>
         {hiddenCount > 0 ? (
           <span
             className={`panel-head-toggle ${showHidden ? 'on' : ''}`}

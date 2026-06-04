@@ -679,6 +679,77 @@ body {
   width: 16px;
 }
 
+/* ---------- help popup ---------- */
+.panel-head-titled {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.help-trigger {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--fg-mute);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0;
+}
+.help-trigger:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.help-popup {
+  position: fixed;
+  z-index: 61;
+  width: 280px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.help-popup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.help-popup-logo {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+.help-popup-title {
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: var(--fg-strong);
+}
+.help-popup-body {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+}
+.help-popup-body code {
+  font-size: 11px;
+  color: var(--accent);
+}
+.help-popup-code {
+  margin: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 8px;
+  font-size: 11px;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+}
+
 /* ---------- status indicators ---------- */
 .status-dot {
   width: 7px;
@@ -1211,6 +1282,11 @@ body {
 .rt-tabs .rt.on {
   color: var(--fg);
   border-bottom: 2px solid var(--accent);
+}
+.rt-help {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
 }
 .rt-body {
   flex: 1 1 auto;
