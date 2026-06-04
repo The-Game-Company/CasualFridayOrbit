@@ -659,6 +659,21 @@ body {
 .dropdown-item.danger:hover {
   color: var(--red);
 }
+.dropdown-item.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dropdown-item.disabled:hover {
+  background: transparent;
+}
+.mcp-feedback {
+  padding: 2px 8px 6px;
+  font-size: 11px;
+  color: var(--fg-dim, var(--fg));
+}
+.mcp-feedback.err {
+  color: var(--red);
+}
 .dropdown-icon {
   color: var(--accent);
   width: 16px;

@@ -7,7 +7,7 @@ import { SessionManager } from './session-manager'
 import { readContextFile } from './context-watch'
 import { listProjects } from './projects'
 import { listSkills } from './skills'
-import { listMcpServers } from './mcp'
+import { listMcpServers, restartMcpServer } from './mcp'
 import { loadConfig, saveConfig } from './config'
 import { listHistory } from './history'
 import { loadWorkspace, saveWorkspace, loadWindowState, saveWindowState } from './workspace'
@@ -17,7 +17,7 @@ import { CoordinationWatcher } from './coordination'
 import { LogWatcher, listKeyDocs } from './logs'
 import { readProjectConfig } from './project-config'
 import { fixGuiPath } from './shell-path'
-import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type WorkspaceState } from '../shared/events'
+import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type McpServer, type WorkspaceState } from '../shared/events'
 
 let win: BrowserWindow | null = null
 let hookServer: HookServer | null = null
@@ -257,6 +257,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.SkillsList, (_e, projectPath: string | null) => listSkills(projectPath))
 
   ipcMain.handle(IPC.McpList, (_e, projectPath: string | null) => listMcpServers(projectPath))
+
+  ipcMain.handle(IPC.McpRestart, (_e, server: McpServer) => restartMcpServer(server))
 
   ipcMain.handle(IPC.ConfigGet, () => loadConfig())
   ipcMain.handle(IPC.ConfigSet, (_e, cfg: AppConfig) => saveConfig(cfg))

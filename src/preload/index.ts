@@ -11,6 +11,7 @@ import {
   type HookEvent,
   type KeyDoc,
   type LogState,
+  type McpRestartResult,
   type McpServer,
   type Project,
   type ProjectInfo,
@@ -34,6 +35,8 @@ const api = {
     ipcRenderer.invoke(IPC.SkillsList, projectPath),
   listMcp: (projectPath: string | null): Promise<McpServer[]> =>
     ipcRenderer.invoke(IPC.McpList, projectPath),
+  restartMcp: (server: McpServer): Promise<McpRestartResult> =>
+    ipcRenderer.invoke(IPC.McpRestart, server),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigGet),
   setConfig: (cfg: AppConfig): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigSet, cfg),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.PickFolder),

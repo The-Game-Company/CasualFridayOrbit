@@ -149,6 +149,13 @@ export interface McpServer {
   enabled: boolean
 }
 
+/** Outcome of restarting an MCP server (killing its stdio OS processes so claude respawns it). */
+export interface McpRestartResult {
+  ok: boolean
+  killed: number
+  error?: string
+}
+
 /** Raw hook event forwarded from claude's hooks -> local server -> renderer. */
 export interface HookEvent {
   /** Which claude session this event belongs to. */
@@ -306,6 +313,7 @@ export const IPC = {
   ProjectList: 'project:list',
   SkillsList: 'skills:list',
   McpList: 'mcp:list',
+  McpRestart: 'mcp:restart',
   ConfigGet: 'config:get',
   ConfigSet: 'config:set',
   PickFolder: 'dialog:pickFolder',
