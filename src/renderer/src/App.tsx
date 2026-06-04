@@ -430,6 +430,16 @@ export default function App(): JSX.Element {
     })
   }, [])
 
+  // Hot-reload the project list when a `.orbit.json`/`.code-workspace` changes on disk.
+  useEffect(() => {
+    return window.orbit.onProjectsChanged(() => {
+      window.orbit.listProjects().then(({ root, projects }) => {
+        setRoot(root)
+        setProjects(projects)
+      })
+    })
+  }, [])
+
   // On launch, ask the main process whether Claude Code can be upgraded. Claude can't be
   // replaced while a session holds the binary open, so if an upgrade is available we raise the
   // gate *before* any terminal spawns (see the lazy-resume effect, which waits on updateChecked).

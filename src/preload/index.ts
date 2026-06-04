@@ -132,6 +132,11 @@ const api = {
     ipcRenderer.on(IPC.HookEvent, fn)
     return () => ipcRenderer.removeListener(IPC.HookEvent, fn)
   },
+  onProjectsChanged: (cb: () => void): (() => void) => {
+    const fn = (): void => cb()
+    ipcRenderer.on(IPC.ProjectsChanged, fn)
+    return () => ipcRenderer.removeListener(IPC.ProjectsChanged, fn)
+  },
   onContextTree: (cb: (sessionId: string, tree: ContextNode[]) => void): (() => void) => {
     const fn = (_e: unknown, p: { sessionId: string; tree: ContextNode[] }): void =>
       cb(p.sessionId, p.tree)

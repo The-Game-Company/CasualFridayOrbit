@@ -6,6 +6,7 @@ import { startHookServer, type HookServer } from './hook-server'
 import { SessionManager } from './session-manager'
 import { readContextFile } from './context-watch'
 import { listProjects } from './projects'
+import { ProjectsWatcher } from './projects-watch'
 import { listSkills } from './skills'
 import { listMcpServers, restartMcpServer } from './mcp'
 import { loadConfig, saveConfig } from './config'
@@ -25,6 +26,7 @@ let sessions: SessionManager | null = null
 let fileWatcher: FileWatcher | null = null
 let coordWatcher: CoordinationWatcher | null = null
 let logWatcher: LogWatcher | null = null
+let projectsWatcher: ProjectsWatcher | null = null
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
@@ -261,7 +263,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.McpRestart, (_e, server: McpServer) => restartMcpServer(server))
 
   ipcMain.handle(IPC.ConfigGet, () => loadConfig())
-  ipcMain.handle(IPC.ConfigSet, (_e, cfg: AppConfig) => saveConfig(cfg))
+  ipcMain.handle(IPC.ConfigSet, (_e, cfg: AppConfig) => {
+    const saved = saveConfig(cfg)
+    // Re-arm the project-config watchers in case the root moved.
+    projectsWatcher?.watch(loadConfig().projectRoot, () => send(IPC.ProjectsChanged, null))
+    return saved
+  })
 
   ipcMain.handle(IPC.PickFolder, async () => {
     const res = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
@@ -383,6 +390,8 @@ app.whenReady().then(async () => {
     (s) => send(IPC.LogUpdate, s),
     () => loadConfig().logDirs
   )
+  projectsWatcher = new ProjectsWatcher()
+  projectsWatcher.watch(loadConfig().projectRoot, () => send(IPC.ProjectsChanged, null))
   sessions = new SessionManager(
     {
       onData: (sessionId, data) => send(IPC.SessionData, { sessionId, data }),
@@ -405,6 +414,7 @@ function shutdown(): void {
   fileWatcher?.unwatch()
   coordWatcher?.unwatch()
   logWatcher?.unwatch()
+  projectsWatcher?.dispose()
   hookServer?.close()
 }
 

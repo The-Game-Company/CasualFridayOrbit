@@ -352,5 +352,6 @@ export const IPC = {
   SessionExit: 'session:exit',
   HookEvent: 'hook:event',
   ContextTree: 'context:tree',
+  ProjectsChanged: 'project:changed',
   UpdateProgress: 'update:progress'
 } as const
