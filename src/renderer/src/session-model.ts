@@ -33,6 +33,12 @@ export interface Tab {
   projectPath: string
   /** columns left→right; each column is a vertical stack of session ids top→bottom */
   columns: string[][]
+  /**
+   * Per-column relative widths (left→right), one weight per live column, used as `fr` units.
+   * Undefined/missing means equal widths (the default and only legacy behavior). Reset to equal
+   * whenever the column count changes (split/close) so weights never go stale against `columns`.
+   */
+  colWeights?: number[]
   /** the focused window within this tab (always one of the ids in `columns`) */
   activeWindow: string
 }
