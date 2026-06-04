@@ -130,6 +130,48 @@ function columnLayout(columns: string[][]): { cols: number; rows: number; cellOf
   return { cols: live.length, rows, cellOf }
 }
 
+/** Width each Ctrl+Shift+←/→ press shifts across the divider, and the floor any column keeps. */
+const RESIZE_STEP = 0.05
+const MIN_COL_WEIGHT = 0.15
+
+/**
+ * The grid's `gridTemplateColumns`. With explicit per-column weights it renders them as `fr`
+ * units (kept as `minmax(0, Xfr)` so panes can still shrink below their content); without them
+ * (the default / any legacy workspace) it falls back to equal `repeat(cols, …)` — pixel-identical
+ * to the pre-weights behavior. Weights only apply when their count matches the live column count;
+ * a mismatch (stale data) safely degrades to equal widths.
+ */
+function gridTemplateColumns(cols: number, weights?: number[]): string {
+  if (weights && weights.length === cols) {
+    return weights.map((w) => `minmax(0, ${w}fr)`).join(' ')
+  }
+  return `repeat(${cols}, minmax(0, 1fr))`
+}
+
+/**
+ * Shift the divider on the active column's right edge (or its left edge when the active column is
+ * the rightmost) by one step in the given direction, returning new weights. Moving the divider
+ * left shrinks the active column and grows its right neighbor; moving right does the mirror. Both
+ * columns are clamped to MIN_COL_WEIGHT so neither collapses, and the moved amount is conserved
+ * (one side gains exactly what the other loses), keeping the total constant.
+ */
+function resizeWeights(weights: number[], activeCol: number, dir: 'L' | 'R'): number[] {
+  // Pick the divider: prefer the one to the active column's right, else its left edge.
+  const hasRight = activeCol < weights.length - 1
+  const leftIdx = hasRight ? activeCol : activeCol - 1
+  const rightIdx = leftIdx + 1
+  if (leftIdx < 0 || rightIdx >= weights.length) return weights
+  // 'L' moves the divider left: the left column shrinks. 'R' moves it right: the left column grows.
+  const delta = dir === 'L' ? -RESIZE_STEP : RESIZE_STEP
+  const nextLeft = weights[leftIdx] + delta
+  const nextRight = weights[rightIdx] - delta
+  if (nextLeft < MIN_COL_WEIGHT || nextRight < MIN_COL_WEIGHT) return weights
+  const next = [...weights]
+  next[leftIdx] = nextLeft
+  next[rightIdx] = nextRight
+  return next
+}
+
 /** A tab's columns with dead/closed sessions filtered out and now-empty columns dropped. */
 function liveColumns(tab: Tab | null | undefined, sessions: SessionState[]): string[][] {
   if (!tab) return []
@@ -336,6 +378,26 @@ export default function App(): JSX.Element {
     setSessions((prev) => prev.map((s) => (s.id === id ? fn(s) : s)))
   }, [])
 
+  // Resize the active tab's split by moving the divider of the active window's column. Shared by
+  // the Ctrl+Shift+←/→ and Alt+Shift+←/→ keyboard branches so the two paths can't drift. No-op
+  // (returns false) with fewer than 2 live columns, so each branch can decide whether to swallow
+  // the key.
+  const resizeSplit = useCallback(
+    (dir: 'L' | 'R'): boolean => {
+      const tab = tabs.find((t) => t.id === activeTabId) ?? null
+      const cols = liveColumns(tab, sessions)
+      if (!tab || cols.length < 2) return false
+      const activeCol = cols.findIndex((c) => c.includes(tab.activeWindow))
+      if (activeCol < 0) return false
+      // Seed from equal weights when none are stored yet (legacy/just-split tabs).
+      const base = tab.colWeights?.length === cols.length ? tab.colWeights : cols.map(() => 1)
+      const next = resizeWeights(base, activeCol, dir)
+      setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, colWeights: next } : t)))
+      return true
+    },
+    [tabs, sessions, activeTabId]
+  )
+
   // projects shown in the user's saved order (drag-to-reorder in the Projects panel)
   const orderedProjects = useMemo(
     () => orderProjects(projects, config?.projectOrder),
@@ -398,7 +460,11 @@ export default function App(): JSX.Element {
                 if (!columns.length) return null
                 const flat = columns.flat()
                 const aw = t.activeWindow && flat.includes(t.activeWindow) ? t.activeWindow : flat[0]
-                return { id: t.id, projectPath: t.projectPath, columns, activeWindow: aw } as Tab
+                // Keep persisted widths only when they still line up with the (possibly trimmed)
+                // live column count; otherwise drop to equal so weights never go stale. Older
+                // workspaces have no colWeights at all and simply load as equal widths.
+                const colWeights = t.colWeights?.length === columns.length ? t.colWeights : undefined
+                return { id: t.id, projectPath: t.projectPath, columns, colWeights, activeWindow: aw } as Tab
               })
               .filter((t): t is Tab => !!t)
           } else {
@@ -485,6 +551,7 @@ export default function App(): JSX.Element {
         id: t.id,
         projectPath: t.projectPath,
         columns: t.columns,
+        colWeights: t.colWeights,
         activeWindow: t.activeWindow
       })),
       activeProject,
@@ -694,7 +761,11 @@ export default function App(): JSX.Element {
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== target.id) return t
-          return { ...t, columns: splitInsert(t.columns, t.activeWindow, id), activeWindow: id }
+          const columns = splitInsert(t.columns, t.activeWindow, id)
+          // Reset to equal widths whenever the column count changes, so weights never go stale
+          // against `columns`; a same-count split (stacked into an existing column) keeps them.
+          const colWeights = columns.length === t.columns.length ? t.colWeights : undefined
+          return { ...t, columns, colWeights, activeWindow: id }
         })
       )
       setActiveTabId(target.id)
@@ -797,7 +868,11 @@ export default function App(): JSX.Element {
     if (remaining.length > 0) {
       const nextActive =
         tab.activeWindow === windowId ? neighbour ?? remaining[remaining.length - 1] : tab.activeWindow
-      setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, columns, activeWindow: nextActive } : t)))
+      // Reset to equal widths if closing dropped a whole column (count change); otherwise keep them.
+      const colWeights = columns.length === tab.columns.length ? tab.colWeights : undefined
+      setTabs((prev) =>
+        prev.map((t) => (t.id === tab.id ? { ...t, columns, colWeights, activeWindow: nextActive } : t))
+      )
       return
     }
     dropTab(tab.id)
@@ -863,6 +938,15 @@ export default function App(): JSX.Element {
         return
       }
 
+      // Ctrl+Shift+←/→ → resize the split: move the divider of the active window's column.
+      // We pick the divider on the RIGHT edge of the active column when one exists, else its LEFT
+      // edge (active column is the rightmost). ArrowLeft moves that divider left, ArrowRight right.
+      if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        // No-op (don't swallow the key) with fewer than 2 columns — resizeSplit returns false.
+        if (resizeSplit(e.key === 'ArrowLeft' ? 'L' : 'R')) grab()
+        return
+      }
+
       // Ctrl+Shift+↑/↓ → previous/next project
       if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         if (!visibleProjectsFlat.length) return
@@ -877,7 +961,7 @@ export default function App(): JSX.Element {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject, sessions, projects, tabs, activeTabId, visibleProjectsFlat])
+  }, [activeProject, sessions, projects, tabs, activeTabId, visibleProjectsFlat, resizeSplit])
 
   // keyboard: Alt+Arrows move between open windows, spatially.
   //   • within the active tab's tiled grid, move to the neighbouring window in that direction
@@ -886,7 +970,21 @@ export default function App(): JSX.Element {
   // there's somewhere to go, and never while a modal or the code editor has focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+      if (!e.altKey || e.ctrlKey || e.metaKey) return
+
+      // Alt+Shift+←/→ → resize the split (Windows Terminal convention). Same behaviour as the
+      // Ctrl+Shift+←/→ branch: move the divider of the active window's column, and only swallow
+      // the key when the resize actually happened (resizeSplit returns false with <2 columns).
+      if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        if (document.querySelector('.modal-overlay')) return
+        if (resizeSplit(e.key === 'ArrowLeft' ? 'L' : 'R')) {
+          e.preventDefault()
+          e.stopPropagation()
+        }
+        return
+      }
+      if (e.shiftKey) return
+
       const dir = { ArrowLeft: 'L', ArrowRight: 'R', ArrowUp: 'U', ArrowDown: 'D' }[e.key]
       if (!dir) return
       if (document.querySelector('.modal-overlay')) return
@@ -959,7 +1057,7 @@ export default function App(): JSX.Element {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject, activeTabId, tabs, sessions])
+  }, [activeProject, activeTabId, tabs, sessions, resizeSplit])
 
   // Dismiss the auto-focus highlight as soon as the user does anything (types, clicks, or
   // navigates) — that's the signal they've seen the jump and taken over the window.
@@ -1104,7 +1202,7 @@ export default function App(): JSX.Element {
           <div
             className="terminals"
             style={{
-              gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+              gridTemplateColumns: gridTemplateColumns(layout.cols, activeTab?.colWeights),
               gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`
             }}
           >

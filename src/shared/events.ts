@@ -288,6 +288,8 @@ export interface PersistedTab {
   projectPath: string
   /** columns left→right; each a vertical stack of session ids top→bottom */
   columns: string[][]
+  /** per-column relative widths (fr units), one per live column; omit/empty means equal widths */
+  colWeights?: number[]
   /** which window is focused within the tab */
   activeWindow: string | null
   /** @deprecated pre-column flat window list — read only to migrate old workspaces. */

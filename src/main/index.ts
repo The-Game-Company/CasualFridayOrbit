@@ -18,7 +18,17 @@ import { CoordinationWatcher } from './coordination'
 import { LogWatcher, listKeyDocs } from './logs'
 import { readProjectConfig } from './project-config'
 import { fixGuiPath } from './shell-path'
+
+import {
+  IPC,
+  type AppConfig,
+  type CreateSessionArgs,
+  type HookEvent,
+  type WorkspaceState
+} from '../shared/events'
+
 import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type McpServer, type WorkspaceState } from '../shared/events'
+
 
 let win: BrowserWindow | null = null
 let hookServer: HookServer | null = null

@@ -13,7 +13,8 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
       [['Ctrl', 'W'], 'Close the active window (and its tab if it was the last window)'],
       [['Ctrl', '1…9'], 'Jump to the Nth tab of the active project'],
       [['Alt', '←/→'], 'Move between split windows, then between tabs'],
-      [['Alt', '↑/↓'], 'Move between stacked split windows']
+      [['Alt', '↑/↓'], 'Move between stacked split windows'],
+      [['Alt/Ctrl', 'Shift', '←/→'], 'Resize split — move the divider of the active window']
     ]
   },
   {
