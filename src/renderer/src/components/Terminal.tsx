@@ -52,6 +52,8 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   // buffer scrolls, so we can tell when the prompt has moved above the viewport.
   const markerRef = useRef<IMarker | null>(null)
   const [pinned, setPinned] = useState(false)
+  // true while the viewport is scrolled up off the live bottom — shows the ↓ jump button
+  const [scrolledUp, setScrolledUp] = useState(false)
   // latest onTitle, so the once-only create effect always calls the current callback
   const onTitleRef = useRef(props.onTitle)
   onTitleRef.current = props.onTitle
@@ -70,12 +72,15 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     const term = termRef.current
     if (!term) {
       setPinned(false)
+      setScrolledUp(false)
       return
     }
     const buf = term.buffer.active
     const m = markerRef.current
     if (m) setPinned(m.line === -1 || m.line < buf.viewportY)
     else setPinned(!!lastPromptRef.current && buf.viewportY < buf.baseY)
+    // "bottom" = following the live end of the buffer (latest output + input box visible)
+    setScrolledUp(buf.viewportY < buf.baseY)
   }, [])
 
   // Re-measure and resize both xterm and the backing pty to the host's real bounds. Guarded
@@ -116,6 +121,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     markerRef.current?.dispose()
     markerRef.current = null
     setPinned(false)
+    setScrolledUp(false)
     window.orbit.createSession({
       sessionId: props.sessionId,
       projectPath: props.projectPath,
@@ -321,6 +327,18 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
         >
           <span className="prompt-pin-icon">❯</span>
           <span className="prompt-pin-text">{props.lastPrompt}</span>
+        </button>
+      )}
+      {scrolledUp && (
+        <button
+          className="scroll-bottom"
+          title="Jump to bottom"
+          onClick={() => {
+            termRef.current?.scrollToBottom()
+            termRef.current?.focus()
+          }}
+        >
+          ↓
         </button>
       )}
       <div ref={hostRef} className="terminal-xterm" />
