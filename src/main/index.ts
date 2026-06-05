@@ -19,14 +19,6 @@ import { LogWatcher, listKeyDocs } from './logs'
 import { readProjectConfig } from './project-config'
 import { fixGuiPath } from './shell-path'
 
-import {
-  IPC,
-  type AppConfig,
-  type CreateSessionArgs,
-  type HookEvent,
-  type WorkspaceState
-} from '../shared/events'
-
 import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type McpServer, type WorkspaceState } from '../shared/events'
 
 
@@ -205,6 +197,11 @@ function createWindow(): void {
     y: saved?.y,
     backgroundColor: '#16181d',
     title: 'Orbit',
+    // Single-bar chrome: the native title bar and menu bar are hidden; the renderer's tab
+    // bar doubles as the titlebar (drag region + ☰ menu button), and the OS min/max/close
+    // buttons are overlaid on its right edge. Colors are re-tinted per theme via IPC.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#1b1e26', symbolColor: '#8b93a7', height: 34 },
     icon: path.join(app.getAppPath(), 'resources', 'orbit.ico'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -261,6 +258,21 @@ function createWindow(): void {
 }
 
 function registerIpc(): void {
+  // The native menu bar is hidden (single-bar chrome) — the tab bar's ☰ button pops the
+  // same application menu up at its own position instead. Accelerators work either way.
+  ipcMain.on(IPC.MenuPopup, (_e, p: { x: number; y: number }) => {
+    if (win) Menu.getApplicationMenu()?.popup({ window: win, x: Math.round(p.x), y: Math.round(p.y) })
+  })
+
+  // Re-tint the overlaid native window buttons when the renderer switches themes.
+  ipcMain.on(IPC.TitleBarTheme, (_e, p: { color: string; symbolColor: string }) => {
+    try {
+      win?.setTitleBarOverlay({ color: p.color, symbolColor: p.symbolColor, height: 34 })
+    } catch {
+      // overlay re-tinting isn't supported on this platform (macOS) — keep launch colors
+    }
+  })
+
   ipcMain.handle(IPC.ProjectList, () => {
     const root = loadConfig().projectRoot
     return { root, projects: listProjects(root) }

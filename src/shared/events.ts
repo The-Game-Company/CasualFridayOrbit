@@ -199,6 +199,14 @@ export interface AppConfig {
   leftWidth: number
   /** width (px) of the right context/activity column — drag the divider to resize */
   rightWidth: number
+  /** relative heights of the left column's sections (projects / skills / mcp) — drag the
+   *  dividers between them to give one section more room than the others */
+  leftSplit?: number[]
+  /** relative heights of the right column's sections (context-tabs panel / activity) */
+  rightSplit?: number[]
+  /** side columns collapsed to a thin strip (chevron on the divider toggles; width is kept) */
+  leftCollapsed?: boolean
+  rightCollapsed?: boolean
   /** auto-jump to a session that just finished and wants input, but only while the session
    *  you're looking at is busy (so you're never yanked away mid-read/type) */
   autoFocus: boolean
@@ -343,6 +351,9 @@ export const IPC = {
   LogWatch: 'log:watch',
   LogUnwatch: 'log:unwatch',
   LogUpdate: 'log:update',
+  // window chrome (single-bar mode: tab bar acts as the titlebar)
+  MenuPopup: 'menu:popup',
+  TitleBarTheme: 'titlebar:theme',
   // session control
   SessionCreate: 'session:create',
   SessionClose: 'session:close',

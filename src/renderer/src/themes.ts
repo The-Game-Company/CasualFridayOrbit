@@ -437,4 +437,6 @@ export function applyTheme(name: ThemeName): void {
   // expose appearance for any CSS / native widgets that care (e.g. form controls)
   root.dataset.theme = name
   root.style.colorScheme = theme.appearance
+  // the native min/max/close buttons overlay the tab bar — tint them to match it
+  window.orbit.setTitleBarTheme(theme.ui['bg-2'], theme.ui['fg-dim'])
 }

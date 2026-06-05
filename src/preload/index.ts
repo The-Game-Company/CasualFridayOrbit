@@ -101,6 +101,11 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.LogUpdate, fn)
   },
 
+  // window chrome (single-bar mode): pop the hidden app menu / re-tint the native buttons
+  popupAppMenu: (x: number, y: number): void => ipcRenderer.send(IPC.MenuPopup, { x, y }),
+  setTitleBarTheme: (color: string, symbolColor: string): void =>
+    ipcRenderer.send(IPC.TitleBarTheme, { color, symbolColor }),
+
   // session control
   createSession: (args: CreateSessionArgs): Promise<boolean> =>
     ipcRenderer.invoke(IPC.SessionCreate, args),
