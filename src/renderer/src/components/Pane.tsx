@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { DragEvent, ReactNode } from 'react'
 import type { SessionState } from '../session-model'
 import { KIND_META } from '../kind-meta'
 import { AgentBadge, StatusDot } from './indicators'
@@ -10,6 +10,10 @@ interface Props {
   canRemove: boolean
   /** highlight: auto-focus just jumped here; clears once the user interacts */
   autoFocused: boolean
+  /** the header is a drag handle for rearranging the window in the grid */
+  draggable: boolean
+  onDragStart: (e: DragEvent) => void
+  onDragEnd: () => void
   onFocus: () => void
   onSplit: () => void
   onRemove: () => void
@@ -17,14 +21,20 @@ interface Props {
 }
 
 /** A single window in a tab: a header bar + the terminal underneath. */
-export function Pane({ session, active, canRemove, autoFocused, onFocus, onSplit, onRemove, children }: Props): JSX.Element {
+export function Pane({ session, active, canRemove, autoFocused, draggable, onDragStart, onDragEnd, onFocus, onSplit, onRemove, children }: Props): JSX.Element {
   return (
     <div
       className={`pane ${active ? 'active' : ''} ${session.activeSkill ? 'skill' : ''} ${autoFocused ? 'auto-focused' : ''}`}
       onMouseDown={onFocus}
     >
       <div className="pane-body">{children}</div>
-      <div className="pane-head">
+      <div
+        className="pane-head"
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        title={draggable ? 'Drag to rearrange this window in the grid' : undefined}
+      >
         <span className="pane-kind">{KIND_META[session.kind].icon}</span>
         <StatusDot status={session.status} />
         <span className="pane-title">{session.title}</span>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import type {
   AppConfig,
   OrbitCommand,
@@ -223,6 +223,30 @@ function splitInsert(columns: string[][], activeWindow: string, id: string): str
   return cols
 }
 
+/** Where a dragged window lands relative to the pane it's dropped on. */
+type DropZone = 'left' | 'right' | 'top' | 'bottom'
+
+/**
+ * Move a window next to another via drag-and-drop. 'left'/'right' carve out a brand-new column
+ * on that side of the target's column; 'top'/'bottom' stack it within the target's column. The
+ * dragged window is removed first (its emptied column collapses), then re-inserted relative to
+ * the target's position *after* that collapse, so indices stay honest.
+ */
+function moveWindow(columns: string[][], dragId: string, targetId: string, zone: DropZone): string[][] {
+  if (dragId === targetId) return columns
+  const cols = columns.map((c) => c.filter((w) => w !== dragId)).filter((c) => c.length > 0)
+  const ci = cols.findIndex((c) => c.includes(targetId))
+  if (ci < 0) return columns
+  if (zone === 'left' || zone === 'right') {
+    cols.splice(zone === 'left' ? ci : ci + 1, 0, [dragId])
+  } else {
+    const at = cols[ci].indexOf(targetId)
+    cols[ci] = [...cols[ci]]
+    cols[ci].splice(zone === 'top' ? at : at + 1, 0, dragId)
+  }
+  return cols
+}
+
 /** Windows of a tab that still have a live session (filters out closed/excluded ids). */
 function liveWindows(tab: Tab | null | undefined, sessions: SessionState[]): string[] {
   if (!tab) return []
@@ -336,9 +360,21 @@ export default function App(): JSX.Element {
   const [projectInfo, setProjectInfo] = useState<ProjectInfo>({ commands: [], accent: null })
   // side-column widths (px), drag the dividers to resize; seeded from + persisted to config
   const [widths, setWidths] = useState({ left: 230, right: 340 })
+  // side columns collapsed to a thin strip (chevron on the divider / strip toggles)
+  const [collapsed, setCollapsed] = useState({ left: false, right: false })
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null)
+  // relative heights of each side column's stacked sections (left: projects/skills/mcp,
+  // right: context-tabs/activity) — drag the horizontal dividers to rebalance them
+  const [splits, setSplits] = useState<{ left: number[]; right: number[] }>({
+    left: [42, 28, 30],
+    right: [45, 55]
+  })
+  const [vDragging, setVDragging] = useState(false)
   // window id that auto-focus just jumped to — shows a highlight until the user interacts
   const [autoFocused, setAutoFocused] = useState<string | null>(null)
+  // window-id being dragged to a new grid position, and the current drop hint under the cursor
+  const [dragWin, setDragWin] = useState<string | null>(null)
+  const [dropHint, setDropHint] = useState<{ target: string; zone: DropZone } | null>(null)
   // ordered queue of background windows that have finished and want attention (oldest first);
   // auto-focus drains it one at a time as the user hands off the window they're on
   const [finishedQueue, setFinishedQueue] = useState<string[]>([])
@@ -352,6 +388,8 @@ export default function App(): JSX.Element {
   const lastSaved = useRef<string>('')
   const widthsRef = useRef(widths)
   widthsRef.current = widths
+  const splitsRef = useRef(splits)
+  splitsRef.current = splits
   const configRef = useRef<AppConfig | null>(config)
   configRef.current = config
   const sessionsRef = useRef(sessions)
@@ -377,6 +415,12 @@ export default function App(): JSX.Element {
     if (config && !widthsSeeded.current) {
       widthsSeeded.current = true
       setWidths({ left: config.leftWidth ?? 230, right: config.rightWidth ?? 340 })
+      setCollapsed({ left: !!config.leftCollapsed, right: !!config.rightCollapsed })
+      // section heights only apply when the stored count matches (stale data degrades to defaults)
+      setSplits((s) => ({
+        left: config.leftSplit?.length === s.left.length ? config.leftSplit : s.left,
+        right: config.rightSplit?.length === s.right.length ? config.rightSplit : s.right
+      }))
     }
   }, [config])
 
@@ -398,6 +442,67 @@ export default function App(): JSX.Element {
       setDragging(null)
       const cfg = configRef.current
       if (cfg) window.orbit.setConfig({ ...cfg, leftWidth: widthsRef.current.left, rightWidth: widthsRef.current.right })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // Collapse/expand a side column (chevron on the divider collapses; clicking the leftover
+  // strip expands). The dragged width stays in state/config, so expanding restores the column
+  // at the size it was collapsed from. Current widths are written along with the flags so a
+  // collapse never persists a stale width over one dragged earlier in the session.
+  const toggleCollapse = (side: 'left' | 'right'): void => {
+    const next = { ...collapsed, [side]: !collapsed[side] }
+    setCollapsed(next)
+    const cfg = configRef.current
+    if (cfg)
+      saveConfig({
+        ...cfg,
+        leftCollapsed: next.left,
+        rightCollapsed: next.right,
+        leftWidth: widthsRef.current.left,
+        rightWidth: widthsRef.current.right
+      })
+  }
+
+  // Start dragging the horizontal divider between section i and i+1 of a side column. Works in
+  // pixels against the two neighbours' real heights at mousedown, converted back to relative
+  // weights so the pair's total is conserved and the rest of the column doesn't move.
+  const startSectResize = (side: 'left' | 'right', i: number) => (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const handle = e.currentTarget as HTMLElement
+    const prev = handle.previousElementSibling as HTMLElement | null
+    const next = handle.nextElementSibling as HTMLElement | null
+    if (!prev || !next) return
+    setVDragging(true)
+    const startY = e.clientY
+    const hA = prev.getBoundingClientRect().height
+    const hB = next.getBoundingClientRect().height
+    const weights = splitsRef.current[side]
+    const pair = weights[i] + weights[i + 1]
+    // keep each section at least ~48px so a header never disappears entirely
+    const minW = hA + hB > 0 ? pair * (48 / (hA + hB)) : 0
+    const onMove = (ev: MouseEvent): void => {
+      const dy = ev.clientY - startY
+      const wA = Math.max(minW, Math.min(pair - minW, pair * ((hA + dy) / (hA + hB))))
+      setSplits((s) => {
+        const arr = [...s[side]]
+        arr[i] = wA
+        arr[i + 1] = pair - wA
+        return { ...s, [side]: arr }
+      })
+    }
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      setVDragging(false)
+      const cfg = configRef.current
+      if (cfg)
+        window.orbit.setConfig({
+          ...cfg,
+          leftSplit: splitsRef.current.left,
+          rightSplit: splitsRef.current.right
+        })
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -697,11 +802,19 @@ export default function App(): JSX.Element {
       window.orbit.onHookEvent((evt: HookEvent) => {
         const focused = evt.sessionId === activeIdRef.current
         updateSession(evt.sessionId, (s) => applyEvent(s, evt, focused))
+        // /clear discarded the conversation — wipe the terminal scrollback behind the fresh
+        // screen too, so scrolling up doesn't show the dead conversation. Delayed a beat so
+        // claude's own clear+repaint lands first (we erase saved lines, not the visible screen).
+        if (evt.event === 'SessionStart' && evt.data?.source === 'clear') {
+          const id = evt.sessionId
+          setTimeout(() => handles.current.get(id)?.clearScrollback(), 150)
+        }
       }),
     [updateSession]
   )
 
-  // open Settings / History from the native menu bar (the in-app titlebar/toolbar are gone)
+  // open Settings / History from the app menu (hidden bar — popped via the tab bar's ☰,
+  // or driven directly by its accelerators)
   useEffect(() => {
     return window.orbit.onMenuCommand((cmd) => {
       if (cmd === 'settings') {
@@ -1209,18 +1322,30 @@ export default function App(): JSX.Element {
     }
   }, [autoFocused])
 
+  // Windows auto-focus already showed the user once. If they navigate away without engaging,
+  // that's a deliberate "not now" — the window is treated as seen and never re-queued for the
+  // same turn (a stray Notification would otherwise flip it back to 'waiting' and auto-focus
+  // would keep dragging the user back). The snooze lifts when the window starts a new turn.
+  const autoFocusSeen = useRef<Set<string>>(new Set())
+
   // Auto-focus queue: keep an ordered list of background windows that have finished and want
-  // attention. A window is "pending" exactly while its status is 'waiting' (set on a background
-  // Stop / Notification) and it isn't the one we're on. We keep discovery order and drop any
-  // window that's no longer waiting (e.g. the user visited it -> focusWindow flips it to idle).
+  // attention. A window is "pending" while its status is 'waiting' (set on a background
+  // Stop / Notification) OR it's blocked on a question / plan approval (awaitingInput) — both
+  // mean it needs the user — and it isn't the one we're on. We keep discovery order and drop
+  // any window that's no longer pending (e.g. the user visited it -> focusWindow flips it to
+  // idle, or the question got answered).
   useEffect(() => {
+    // a new turn re-arms auto-focus for a previously snoozed window
+    for (const s of sessions) if (s.status === 'busy') autoFocusSeen.current.delete(s.id)
+    const needsUser = (s: SessionState): boolean =>
+      (s.status === 'waiting' || s.awaitingInput) && !autoFocusSeen.current.has(s.id)
     setFinishedQueue((prev) => {
       const pending = new Set(
-        sessions.filter((s) => s.status === 'waiting' && s.id !== activeId).map((s) => s.id)
+        sessions.filter((s) => needsUser(s) && s.id !== activeId).map((s) => s.id)
       )
       const next = prev.filter((id) => pending.has(id))
       for (const s of sessions)
-        if (s.status === 'waiting' && s.id !== activeId && !next.includes(s.id)) next.push(s.id)
+        if (needsUser(s) && s.id !== activeId && !next.includes(s.id)) next.push(s.id)
       return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next
     })
   }, [sessions, activeId])
@@ -1228,17 +1353,98 @@ export default function App(): JSX.Element {
   // Drain the queue: the moment the window you're on is busy again (you handed it off by
   // submitting input) — and you're not mid-question on it — jump to the oldest finished chat.
   // This also covers the instant case: if you're already watching a busy chat when another
-  // finishes, it gets queued and immediately drained here.
+  // finishes, it gets queued and immediately drained here. Crucially this only fires on a
+  // real hand-off — the window you were *already on* turning busy, or a new finished window
+  // arriving while you stayed put — never on the render where you manually switched windows,
+  // so clicking onto a busy session doesn't get hijacked.
+  const drainRef = useRef<{ activeId: string | null; busy: boolean; queueHead: string | undefined }>({
+    activeId: null,
+    busy: false,
+    queueHead: undefined
+  })
   useEffect(() => {
-    if (!config?.autoFocus) return
     const cur = sessions.find((s) => s.id === activeId)
-    if (!cur || cur.status !== 'busy' || cur.awaitingInput) return
     const nextId = finishedQueue.find((id) => id !== activeId)
+    const prev = drainRef.current
+    drainRef.current = { activeId, busy: cur?.status === 'busy', queueHead: nextId }
+    if (!config?.autoFocus) return
+    if (!cur || cur.status !== 'busy' || cur.awaitingInput) return
     if (!nextId) return
+    // user just navigated here themselves — don't yank them away
+    if (prev.activeId !== activeId) return
+    // nothing new happened on this window: it was already busy and the queue head is unchanged
+    if (prev.busy && prev.queueHead === nextId) return
     focusWindow(nextId)
     setAutoFocused(nextId)
+    // one jump per turn: even if the user leaves without engaging, don't bring them back here
+    autoFocusSeen.current.add(nextId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, finishedQueue, activeId, config?.autoFocus])
+
+  /** Which side of a pane the cursor is over while dragging — outer quarters split into a new
+   *  column left/right; the middle half stacks above/below within the target's column. */
+  function zoneAt(e: DragEvent, el: HTMLElement): DropZone {
+    const r = el.getBoundingClientRect()
+    const x = (e.clientX - r.left) / r.width
+    if (x < 0.25) return 'left'
+    if (x > 0.75) return 'right'
+    return (e.clientY - r.top) / r.height < 0.5 ? 'top' : 'bottom'
+  }
+
+  /** Commit a drag-rearrange: move the dragged window next to `targetId` in the active tab. */
+  function dropWindow(targetId: string, zone: DropZone): void {
+    const dragId = dragWin
+    setDragWin(null)
+    setDropHint(null)
+    if (!dragId || dragId === targetId) return
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== activeTabId || !tabWindows(t).includes(dragId)) return t
+        const columns = moveWindow(t.columns, dragId, targetId, zone)
+        if (columns === t.columns) return t
+        // a changed column count invalidates the stored widths (same rule as split/close)
+        const colWeights = columns.length === t.columns.length ? t.colWeights : undefined
+        return { ...t, columns, colWeights, activeWindow: dragId }
+      })
+    )
+    focusWindow(dragId)
+  }
+
+  /** Commit a drag onto a tab in the tab bar: move the dragged window out of its own tab and
+   *  merge it into `targetTabId` (split next to that tab's active window). The emptied source
+   *  tab disappears; weights reset wherever the column count changed (same rule as split/close). */
+  function dropWindowOnTab(targetTabId: string): void {
+    const dragId = dragWin
+    setDragWin(null)
+    setDropHint(null)
+    if (!dragId) return
+    const source = tabs.find((t) => tabWindows(t).includes(dragId))
+    const target = tabs.find((t) => t.id === targetTabId)
+    if (!source || !target || source.id === target.id) return
+    if (source.projectPath !== target.projectPath) return
+    setTabs((prev) =>
+      prev
+        .map((t) => {
+          if (t.id === source.id) {
+            const columns = t.columns.map((c) => c.filter((w) => w !== dragId)).filter((c) => c.length > 0)
+            const colWeights = columns.length === t.columns.length ? t.colWeights : undefined
+            const activeWindow = t.activeWindow === dragId ? (columns[0]?.[0] ?? '') : t.activeWindow
+            return { ...t, columns, colWeights, activeWindow }
+          }
+          if (t.id === target.id) {
+            const columns = splitInsert(t.columns, t.activeWindow, dragId)
+            const colWeights = columns.length === t.columns.length ? t.colWeights : undefined
+            return { ...t, columns, colWeights, activeWindow: dragId }
+          }
+          return t
+        })
+        .filter((t) => t.columns.length > 0)
+    )
+    setActiveProject(target.projectPath)
+    setActiveTabId(target.id)
+    updateSession(dragId, (x) => ({ ...x, unseen: false, status: x.status === 'waiting' ? 'idle' : x.status }))
+    setTimeout(() => handles.current.get(dragId)?.focus(), 0)
+  }
 
   const pickSkill = (sk: Skill): void => {
     if (!activeId) return
@@ -1295,45 +1501,77 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app">
-      <div className={`columns ${dragging ? 'resizing' : ''}`}>
+      {/* single top bar: doubles as the window titlebar (native title/menu bars are hidden) */}
+      <TabBar
+        tabs={projectTabs}
+        sessions={sessions}
+        activeTabId={activeTabId}
+        startedIds={started}
+        onSelect={focusTab}
+        onClose={closeTab}
+        onNew={(kind) => activeProject && createSession(activeProject, kind)}
+        onContext={(id, x, y) => setTabMenu({ id, x, y })}
+        canNew={!!activeProject}
+        dragWin={dragWin}
+        onDropWindow={dropWindowOnTab}
+      />
+      <div className={`columns ${dragging ? 'resizing' : ''} ${vDragging ? 'vresizing' : ''}`}>
+        {collapsed.left ? (
+          <div
+            className="col-strip left"
+            onClick={() => toggleCollapse('left')}
+            title="Expand panel"
+          >
+            ›
+          </div>
+        ) : (
+          <>
         <aside className="col col-left" style={{ flex: `0 0 ${widths.left}px` }}>
-          <Projects
-            root={root}
-            projects={orderedProjects}
-            sessions={sessions}
-            activeProject={activeProject}
-            restoreExclude={config.restoreExclude ?? []}
-            hidden={config.hidden ?? []}
-            onOpen={openProject}
-            onContext={(path, x, y) => setProjMenu({ path, x, y })}
-            onReorder={reorderProjects}
-          />
-          <SkillsPanel skills={skills} activeSkill={active?.activeSkill ?? null} onPick={pickSkill} />
-          <McpPanel
-            servers={mcpServers}
-            activeMcp={active?.mcpActive ?? []}
-            onOpenFile={setEditorPath}
-          />
+          <div className="sect" style={{ flex: `${splits.left[0]} 1 0%` }}>
+            <Projects
+              root={root}
+              projects={orderedProjects}
+              sessions={sessions}
+              activeProject={activeProject}
+              restoreExclude={config.restoreExclude ?? []}
+              hidden={config.hidden ?? []}
+              onOpen={openProject}
+              onContext={(path, x, y) => setProjMenu({ path, x, y })}
+              onReorder={reorderProjects}
+            />
+          </div>
+          <div className="row-resizer" onMouseDown={startSectResize('left', 0)} title="Drag to resize" />
+          <div className="sect" style={{ flex: `${splits.left[1]} 1 0%` }}>
+            <SkillsPanel skills={skills} activeSkill={active?.activeSkill ?? null} onPick={pickSkill} />
+          </div>
+          <div className="row-resizer" onMouseDown={startSectResize('left', 1)} title="Drag to resize" />
+          <div className="sect" style={{ flex: `${splits.left[2]} 1 0%` }}>
+            <McpPanel
+              servers={mcpServers}
+              activeMcp={active?.mcpActive ?? []}
+              onOpenFile={setEditorPath}
+            />
+          </div>
         </aside>
 
         <div
           className={`col-resizer ${dragging === 'left' ? 'dragging' : ''}`}
           onMouseDown={startResize('left')}
           title="Drag to resize"
-        />
+        >
+          <button
+            className="col-collapse"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => toggleCollapse('left')}
+            title="Collapse panel"
+          >
+            ‹
+          </button>
+        </div>
+          </>
+        )}
 
         <main className="col col-center">
-          <TabBar
-            tabs={projectTabs}
-            sessions={sessions}
-            activeTabId={activeTabId}
-            startedIds={started}
-            onSelect={focusTab}
-            onClose={closeTab}
-            onNew={(kind) => activeProject && createSession(activeProject, kind)}
-            onContext={(id, x, y) => setTabMenu({ id, x, y })}
-            canNew={!!activeProject}
-          />
           <CommandBar commands={projectInfo.commands} onRun={runCommand} />
           <div className={`center-body ${editorDocked && editorPath ? 'split' : ''}`}>
           <div
@@ -1366,12 +1604,39 @@ export default function App(): JSX.Element {
                         }
                       : { display: 'none' }
                   }
+                  onDragOver={(e) => {
+                    if (!dragWin || dragWin === s.id) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    const zone = zoneAt(e, e.currentTarget)
+                    setDropHint((prev) =>
+                      prev?.target === s.id && prev.zone === zone ? prev : { target: s.id, zone }
+                    )
+                  }}
+                  onDragLeave={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node))
+                      setDropHint((prev) => (prev?.target === s.id ? null : prev))
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    dropWindow(s.id, zoneAt(e, e.currentTarget))
+                  }}
                 >
                   <Pane
                     session={s}
                     active={s.id === activeId}
                     canRemove={visibleEffective.length > 1}
                     autoFocused={s.id === autoFocused}
+                    draggable={visibleEffective.length > 1 || projectTabs.length > 1}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', s.id)
+                      e.dataTransfer.effectAllowed = 'move'
+                      setDragWin(s.id)
+                    }}
+                    onDragEnd={() => {
+                      setDragWin(null)
+                      setDropHint(null)
+                    }}
                     onFocus={() => focusWindow(s.id)}
                     onSplit={() => createSession(s.projectPath, 'claude', { split: true })}
                     onRemove={() => closeWindow(s.id)}
@@ -1395,6 +1660,9 @@ export default function App(): JSX.Element {
                       onTitle={(t) => retitleFromTerminal(s.id, t)}
                     />
                   </Pane>
+                  {dropHint?.target === s.id && dragWin && dragWin !== s.id && (
+                    <div className={`drop-zone drop-${dropHint.zone}`} />
+                  )}
                 </div>
               )
             })}
@@ -1414,15 +1682,34 @@ export default function App(): JSX.Element {
           </div>
         </main>
 
+        {collapsed.right ? (
+          <div
+            className="col-strip right"
+            onClick={() => toggleCollapse('right')}
+            title="Expand panel"
+          >
+            ‹
+          </div>
+        ) : (
+          <>
         <div
           className={`col-resizer ${dragging === 'right' ? 'dragging' : ''}`}
           onMouseDown={startResize('right')}
           title="Drag to resize"
-        />
+        >
+          <button
+            className="col-collapse"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => toggleCollapse('right')}
+            title="Collapse panel"
+          >
+            ›
+          </button>
+        </div>
 
         <aside className="col col-right" style={{ flex: `0 0 ${widths.right}px` }}>
           <SkillHud session={active} />
-          <div className="panel right-top">
+          <div className="panel right-top" style={{ flex: `${splits.right[0]} 1 0%` }}>
             <div className="panel-head rt-tabs">
               <button className={`rt ${rightView === 'context' ? 'on' : ''}`} onClick={() => setRightView('context')}>
                 CONTEXT
@@ -1488,11 +1775,14 @@ export default function App(): JSX.Element {
               {rightView === 'logs' && <LogPanel log={log} />}
             </div>
           </div>
-          <div className="panel activity-wrap">
+          <div className="row-resizer" onMouseDown={startSectResize('right', 0)} title="Drag to resize" />
+          <div className="panel activity-wrap" style={{ flex: `${splits.right[1]} 1 0%` }}>
             <SubAgents items={active?.subagents ?? []} />
             <Activity items={active?.activity ?? []} />
           </div>
         </aside>
+          </>
+        )}
       </div>
 
       {tabMenu && menuTab && (

@@ -16,6 +16,10 @@ interface Props {
   onNew: (kind: TermKind) => void
   onContext: (tabId: string, x: number, y: number) => void
   canNew: boolean
+  /** id of the window currently being dragged (if any) — tabs become drop targets */
+  dragWin: string | null
+  /** merge the dragged window into this tab */
+  onDropWindow: (tabId: string) => void
 }
 
 /** Roll a tab's windows up into one status: busy beats waiting beats idle. */
@@ -34,9 +38,12 @@ export function TabBar({
   onClose,
   onNew,
   onContext,
-  canNew
+  canNew,
+  dragWin,
+  onDropWindow
 }: Props): JSX.Element {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [dropTab, setDropTab] = useState<string | null>(null)
   const byId = new Map(sessions.map((s) => [s.id, s]))
 
   const pick = (kind: TermKind): void => {
@@ -46,6 +53,17 @@ export function TabBar({
 
   return (
     <div className="tabbar">
+      {/* native menu bar is hidden — this pops the same File/View menu (shortcuts still work) */}
+      <button
+        className="tab-menu"
+        title="Menu"
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          window.orbit.popupAppMenu(r.left, r.bottom + 2)
+        }}
+      >
+        ☰
+      </button>
       {tabs.map((t) => {
         const ids = tabWindows(t)
         const wins = ids.map((id) => byId.get(id)).filter((s): s is SessionState => !!s)
@@ -58,11 +76,29 @@ export function TabBar({
         const count = wins.length
         // a tab is "paused" (lazy-resume) until at least one of its windows has spawned
         const paused = !ids.some((id) => startedIds.has(id))
+        // a dragged window can merge into any tab except the one it already lives in
+        const canDrop = !!dragWin && !ids.includes(dragWin)
         return (
           <div
             key={t.id}
-            className={`tab ${t.id === activeTabId ? 'active' : ''} ${count > 1 ? 'split' : ''} ${paused ? 'paused' : ''} ${skill ? 'skill' : ''}`}
+            className={`tab ${t.id === activeTabId ? 'active' : ''} ${count > 1 ? 'split' : ''} ${paused ? 'paused' : ''} ${skill ? 'skill' : ''} ${canDrop && dropTab === t.id ? 'drop-target' : ''}`}
             onClick={() => onSelect(t.id)}
+            onDragOver={(e) => {
+              if (!canDrop) return
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              setDropTab((prev) => (prev === t.id ? prev : t.id))
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node))
+                setDropTab((prev) => (prev === t.id ? null : prev))
+            }}
+            onDrop={(e) => {
+              if (!canDrop) return
+              e.preventDefault()
+              setDropTab(null)
+              onDropWindow(t.id)
+            }}
             onContextMenu={(e) => {
               e.preventDefault()
               onContext(t.id, e.clientX, e.clientY)

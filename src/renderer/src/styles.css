@@ -45,56 +45,8 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--fg-mute);
-}
-
-/* ---------- titlebar ---------- */
-.titlebar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 40px;
-  padding: 0 14px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
-}
-.logo {
-  color: var(--accent);
-  font-weight: 600;
-}
-.subtitle {
-  color: var(--fg-mute);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-flash {
-  margin-left: auto;
-  color: var(--skill);
-  background: color-mix(in srgb, var(--skill) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--skill) 40%, transparent);
-  padding: 3px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  animation: pop 0.25s ease;
-}
-.gear {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--fg-dim);
-  font-size: 16px;
-  cursor: pointer;
-}
-.skill-flash + .gear {
-  margin-left: 0;
-}
-@keyframes pop {
-  from {
-    transform: scale(0.9);
-    opacity: 0;
-  }
+  /* no tab bar yet — let the whole loading screen drag the (frameless) window */
+  -webkit-app-region: drag;
 }
 
 /* ---------- columns ---------- */
@@ -131,6 +83,7 @@ body {
 }
 /* draggable dividers between columns */
 .col-resizer {
+  position: relative;
   flex: 0 0 5px;
   cursor: col-resize;
   background: transparent;
@@ -141,6 +94,57 @@ body {
 .col-resizer.dragging {
   background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
+/* collapse chevron riding the divider — always visible, hides the side column */
+.col-collapse {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 9px;
+  background: var(--bg-3);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 6;
+}
+.col-collapse:hover {
+  color: var(--fg-strong);
+  background: color-mix(in srgb, var(--accent) 25%, var(--bg-3));
+  border-color: var(--accent);
+}
+.columns.resizing .col-collapse {
+  opacity: 0;
+  pointer-events: none;
+}
+/* a collapsed side column leaves this thin strip; click it to expand back */
+.col-strip {
+  flex: 0 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-2);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+.col-strip.left {
+  border-right: 1px solid var(--line);
+}
+.col-strip.right {
+  border-left: 1px solid var(--line);
+}
+.col-strip:hover {
+  color: var(--fg-strong);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+}
 /* while dragging a divider, don't let the terminals capture the mouse (selection / mouse mode) */
 .columns.resizing {
   cursor: col-resize;
@@ -148,6 +152,35 @@ body {
 }
 .columns.resizing .terminal-host {
   pointer-events: none;
+}
+/* draggable dividers between a side column's stacked sections (projects/skills/mcp, top/activity) */
+.row-resizer {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: transparent;
+  z-index: 5;
+  transition: background 0.12s ease;
+}
+.row-resizer:hover {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.columns.vresizing {
+  cursor: row-resize;
+  user-select: none;
+}
+.columns.vresizing .terminal-host {
+  pointer-events: none;
+}
+/* wrapper that carries a section's dragged height; the panel inside just fills it */
+.sect {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.sect > * {
+  flex: 1 1 auto !important;
+  min-height: 0;
 }
 
 /* ---------- panels ---------- */
@@ -296,6 +329,26 @@ body {
   padding: 0 6px;
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+}
+/* per-state chat counts inside the badge: working · waiting-for-you · idle */
+.open-count .cnt.busy {
+  color: var(--accent);
+  font-weight: 700;
+}
+.open-count .cnt.waiting {
+  color: var(--orange);
+  font-weight: 700;
+}
+.open-count .cnt.idle {
+  color: var(--fg-dim);
+}
+.open-count .cnt + .cnt::before {
+  content: '·';
+  color: var(--fg-mute);
+  margin: 0 3px;
+  font-weight: 400;
 }
 .open-count.state-busy {
   color: var(--accent);
@@ -519,17 +572,44 @@ body {
   border-color: var(--accent);
 }
 
-/* ---------- tab bar ---------- */
+/* ---------- tab bar (doubles as the window titlebar — native bars are hidden) ---------- */
 .tabbar {
   display: flex;
   align-items: stretch;
   gap: 2px;
   height: 34px;
-  padding: 0 6px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
   overflow-x: auto;
+  /* empty space drags the window (double-click maximizes)… */
+  -webkit-app-region: drag;
+  /* …and the native min/max/close buttons overlay the right edge — keep content clear of
+     them (and of macOS traffic lights on the left) via the window-controls-overlay env(). */
+  padding-left: calc(env(titlebar-area-x, 0px) + 6px);
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 6px);
+}
+/* anything clickable opts back out of the drag region */
+.tabbar .tab,
+.tabbar .tab-new-wrap,
+.tabbar .tab-menu {
+  -webkit-app-region: no-drag;
+}
+.tab-menu {
+  align-self: center;
+  margin-right: 4px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  padding: 3px 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+.tab-menu:hover {
+  color: var(--fg);
+  background: var(--bg-3);
 }
 .tab {
   display: flex;
@@ -562,6 +642,12 @@ body {
 }
 .tab.paused {
   opacity: 0.6;
+}
+.tab.drop-target {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .tab.paused .tab-kind {
   color: var(--amber);
@@ -915,6 +1001,33 @@ body {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  position: relative; /* anchors the drag-rearrange drop-zone overlay */
+}
+/* drag-to-rearrange: the pane header is the drag handle */
+.pane-head[draggable='true'] {
+  cursor: grab;
+}
+/* translucent overlay showing where the dragged window will land on this pane */
+.drop-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 2px solid var(--accent);
+  border-radius: 7px;
+  z-index: 5;
+}
+.drop-zone.drop-left {
+  right: 50%;
+}
+.drop-zone.drop-right {
+  left: 50%;
+}
+.drop-zone.drop-top {
+  bottom: 50%;
+}
+.drop-zone.drop-bottom {
+  top: 50%;
 }
 .pane {
   display: flex;
@@ -1043,34 +1156,38 @@ body {
   width: 100%;
   padding: 6px 8px;
 }
+/* Floating pill, deliberately inset from the tab bar above it — a full-width bar glued under
+   the tabs read as one strip of controls and caught clicks aimed at a tab (or at the
+   terminal). The gap + pill shape make it obviously an overlay, and shrink its hit area. */
 .prompt-pin {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  top: 10px;
+  left: 14px;
+  max-width: calc(100% - 28px);
   z-index: 5;
   display: flex;
   align-items: center;
-  gap: 9px;
-  min-height: 38px;
-  padding: 8px 14px;
-  background: var(--bg-2);
-  border: none;
-  border-bottom: 2px solid var(--accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  color: var(--fg);
+  gap: 8px;
+  padding: 5px 14px 5px 12px;
+  background: color-mix(in srgb, var(--bg-2) 92%, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 999px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+  color: var(--fg-dim);
   font: inherit;
-  font-size: 15px;
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  width: 100%;
+  width: auto;
 }
 .prompt-pin:hover {
   background: var(--bg-3);
+  color: var(--fg);
+  border-color: var(--accent);
 }
 .prompt-pin-icon {
   color: var(--accent);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   flex: 0 0 auto;
 }
@@ -2197,37 +2314,113 @@ body {
   padding: 2px 12px 6px;
   color: var(--fg-mute);
 }
-.coord-lease {
+.coord-h-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.coord-h-toggle:hover {
+  color: var(--fg);
+}
+.coord-caret {
+  display: inline-block;
+  width: 10px;
+  color: var(--fg-mute);
+}
+.coord-group {
+  padding: 3px 12px 4px;
+  border-left: 2px solid transparent;
+}
+.coord-group.stale {
+  border-left-color: var(--amber);
+}
+.coord-group-h {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 3px 12px;
+  gap: 6px;
 }
-.coord-lease.stale {
-  background: color-mix(in srgb, var(--amber) 12%, transparent);
+.coord-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+  flex: 0 0 auto;
+  align-self: center;
 }
-.coord-res {
-  flex: 1 1 auto;
+.coord-agent {
+  color: var(--fg-dim);
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coord-age {
+  color: var(--fg-mute);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.coord-group.stale .coord-age {
+  color: var(--amber);
+}
+.coord-lease-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0 1px 14px;
+}
+.coord-chip {
+  flex: 0 0 auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-mute);
+  background: color-mix(in srgb, var(--fg-mute) 14%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.coord-path {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--accent);
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
+  cursor: pointer;
 }
-.coord-agent {
-  color: var(--fg-dim);
-  flex: 0 0 auto;
+.coord-path.expanded {
+  white-space: normal;
+  word-break: break-all;
 }
-.coord-age {
+.coord-path.muted {
   color: var(--fg-mute);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
+  cursor: default;
 }
-.coord-lease.stale .coord-age {
-  color: var(--amber);
+.coord-more {
+  display: block;
+  margin: 2px 0 0 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-mute);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.coord-more:hover {
+  color: var(--fg);
+}
+.coord-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.coord-wip.expanded .coord-clamp {
+  -webkit-line-clamp: unset;
 }
 .coord-wip {
+  cursor: pointer;
   padding: 5px 12px;
   border-left: 2px solid var(--line);
   margin: 2px 8px;
@@ -2249,10 +2442,8 @@ body {
 }
 .coord-wip-scope {
   color: var(--fg-mute);
+  font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .coord-takeover {
   padding: 2px 12px;
@@ -2262,6 +2453,22 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.coord-takeover.parsed {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 11px;
+}
+.coord-takeover-time {
+  flex: 0 0 auto;
+  min-width: 52px;
+  color: var(--fg-mute);
+  font-variant-numeric: tabular-nums;
+}
+.coord-takeover-arrow {
+  color: var(--fg-mute);
 }
 
 /* ---------- log panel ---------- */
