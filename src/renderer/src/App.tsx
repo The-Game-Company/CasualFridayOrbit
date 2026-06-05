@@ -272,6 +272,33 @@ interface TabMenu {
   y: number
 }
 
+/**
+ * A window the user just closed, kept so Ctrl+Shift+W can reopen it where it was (undo-close).
+ * We snapshot enough to recreate the session and drop it back into the same tab/column/row. If
+ * the closed session had a `resumeId` it gets resumed into the same conversation; if it was an
+ * empty chat (no transcript was ever written, so no resumeId) we reopen a fresh chat in its
+ * place instead — there's nothing to resume.
+ */
+interface ClosedWindow {
+  session: {
+    projectPath: string
+    projectName: string
+    kind: TermKind
+    title: string
+    resumeId?: string
+    startupCommand?: string
+    lastPrompt: string
+  }
+  /** id of the tab it lived in (recreated with this id if the tab itself was dropped) */
+  tabId: string
+  tabProjectPath: string
+  /** index of the owning tab among all tabs at close time (where to re-insert a dropped tab) */
+  tabIndex: number
+  /** column / row of the window within its tab at close time */
+  colIndex: number
+  rowIndex: number
+}
+
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
@@ -317,6 +344,8 @@ export default function App(): JSX.Element {
   const [finishedQueue, setFinishedQueue] = useState<string[]>([])
 
   const handles = useRef<Map<string, TermHandle>>(new Map())
+  // stack of recently closed windows for Ctrl+Shift+W (undo-close); newest on top
+  const closedStack = useRef<ClosedWindow[]>([])
   const activeIdRef = useRef<string | null>(null)
   const activeProjectRef = useRef<string | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -845,6 +874,102 @@ export default function App(): JSX.Element {
     }
   }
 
+  /** Remember a window we're about to close so Ctrl+Shift+W can reopen it where it was. */
+  function snapshotClosed(windowId: string): void {
+    const sess = sessions.find((s) => s.id === windowId)
+    if (!sess) return
+    const tab = tabs.find((t) => tabWindows(t).includes(windowId)) ?? null
+    let colIndex = 0
+    let rowIndex = 0
+    let tabIndex = tabs.length
+    let tabId = ''
+    let tabProjectPath = sess.projectPath
+    if (tab) {
+      tabId = tab.id
+      tabProjectPath = tab.projectPath
+      tabIndex = tabs.findIndex((t) => t.id === tab.id)
+      tab.columns.forEach((col, ci) => {
+        const ri = col.indexOf(windowId)
+        if (ri >= 0) {
+          colIndex = ci
+          rowIndex = ri
+        }
+      })
+    }
+    closedStack.current.push({
+      session: {
+        projectPath: sess.projectPath,
+        projectName: sess.projectName,
+        kind: sess.kind,
+        title: sess.title,
+        resumeId: sess.resumeId,
+        startupCommand: sess.startupCommand,
+        lastPrompt: sess.lastPrompt
+      },
+      tabId,
+      tabProjectPath,
+      tabIndex,
+      colIndex,
+      rowIndex
+    })
+    if (closedStack.current.length > 25) closedStack.current.shift()
+  }
+
+  /**
+   * Reopen the most recently closed window (Ctrl+Shift+W). Restores it into the same tab and
+   * column/row it was closed from — recreating the tab if it was dropped. A chat that held a
+   * real conversation comes back resumed (--resume via its resumeId); an empty chat (no
+   * resumeId) just reopens fresh in its place, since there's no transcript to resume.
+   */
+  function reopenClosed(): void {
+    const entry = closedStack.current.pop()
+    if (!entry) return
+    const s = entry.session
+    const resumeId = s.resumeId
+    // already reopened (e.g. via History)? just focus it and drop the entry.
+    if (resumeId) {
+      const open = sessions.find((x) => x.resumeId === resumeId)
+      if (open) {
+        focusWindow(open.id)
+        return
+      }
+    }
+    const id = uid()
+    setSessions((prev) => [
+      ...prev,
+      {
+        ...initSession(id, s.projectPath, s.projectName, s.kind, s.title, resumeId, s.startupCommand),
+        lastPrompt: resumeId ? s.lastPrompt : ''
+      }
+    ])
+    setActiveProject(s.projectPath)
+
+    const existing = tabs.find((t) => t.id === entry.tabId)
+    if (existing) {
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== entry.tabId) return t
+          const columns = t.columns.map((c) => [...c])
+          const ci = Math.min(entry.colIndex, columns.length)
+          if (ci >= columns.length) columns.push([id])
+          else columns[ci].splice(Math.min(entry.rowIndex, columns[ci].length), 0, id)
+          return { ...t, columns, activeWindow: id }
+        })
+      )
+      setActiveTabId(entry.tabId)
+    } else {
+      const tabId = entry.tabId || uid()
+      setTabs((prev) => {
+        const at = Math.min(Math.max(entry.tabIndex, 0), prev.length)
+        const next = [...prev]
+        next.splice(at, 0, { id: tabId, projectPath: entry.tabProjectPath, columns: [[id]], activeWindow: id })
+        return next
+      })
+      setActiveTabId(tabId)
+    }
+    setTimeout(() => handles.current.get(id)?.focus(), 0)
+  }
+
   /**
    * Close one window. If it's the tab's last window, the tab closes too — except when it's
    * also the only tab left: closing it would leave zero tabs (which looks broken), so we no-op.
@@ -852,6 +977,7 @@ export default function App(): JSX.Element {
   function closeWindow(windowId: string): void {
     const tab = tabs.find((t) => tabWindows(t).includes(windowId))
     if (!tab) {
+      snapshotClosed(windowId)
       setSessions((prev) => prev.filter((s) => s.id !== windowId))
       return
     }
@@ -864,6 +990,7 @@ export default function App(): JSX.Element {
     const columns = tab.columns.map((c) => c.filter((w) => w !== windowId)).filter((c) => c.length > 0)
     const remaining = columns.flat()
     if (remaining.length === 0 && tabs.length === 1) return
+    snapshotClosed(windowId)
     setSessions((prev) => prev.filter((s) => s.id !== windowId))
     if (remaining.length > 0) {
       const nextActive =
@@ -882,7 +1009,9 @@ export default function App(): JSX.Element {
   function closeTab(tabId: string): void {
     const tab = tabs.find((t) => t.id === tabId)
     if (!tab) return
-    const winSet = new Set(tabWindows(tab))
+    const wins = tabWindows(tab)
+    wins.forEach((w) => snapshotClosed(w))
+    const winSet = new Set(wins)
     setSessions((prev) => prev.filter((s) => !winSet.has(s.id)))
     dropTab(tabId)
   }
@@ -890,6 +1019,7 @@ export default function App(): JSX.Element {
   // keyboard:
   //   • Ctrl+\           split the active tab with a new Claude window
   //   • Ctrl+W           close the active window (and its tab if it was the last window)
+  //   • Ctrl+Shift+W     reopen the most recently closed window where it was (undo-close)
   //   • Ctrl+1..9        focus the Nth tab of the active project (by position)
   //   • Ctrl+Shift+↑/↓   move to the previous/next project (and focus/open it)
   useEffect(() => {
@@ -924,6 +1054,13 @@ export default function App(): JSX.Element {
           grab()
           closeWindow(activeId)
         }
+        return
+      }
+
+      // Ctrl+Shift+W → reopen the most recently closed window where it was (undo-close)
+      if (e.shiftKey && e.key.toLowerCase() === 'w') {
+        grab()
+        reopenClosed()
         return
       }
 

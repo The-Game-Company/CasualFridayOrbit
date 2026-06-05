@@ -252,8 +252,12 @@ export function applyEvent(s: SessionState, evt: HookEvent, focused: boolean): S
   const d = evt.data ?? {}
   const next: SessionState = { ...s }
 
-  // Capture the real claude session id (stable across resumes) for later --resume.
-  if (typeof d.session_id === 'string' && d.session_id) next.resumeId = d.session_id
+  // Adopt the real claude session id for later --resume, but skip SessionStart: it fires before
+  // the first prompt, and claude doesn't write a transcript until a message is sent — adopting the
+  // id that early persists a resumeId pointing at no conversation, so the next launch fails with
+  // "No conversation found". Every later event means a turn is underway, so the transcript exists.
+  if (evt.event !== 'SessionStart' && typeof d.session_id === 'string' && d.session_id)
+    next.resumeId = d.session_id
   // Track the live reasoning effort (every hook carries it; updates if changed mid-session).
   if (evt.effort) next.effort = evt.effort
 
