@@ -329,10 +329,14 @@ export function applyEvent(s: SessionState, evt: HookEvent, focused: boolean): S
       }
       break
     }
-    case 'Stop':
-      // turn complete -> reset in-flight counters; flag for attention if not focused
-      next.status = focused ? 'idle' : 'waiting'
-      next.unseen = focused ? false : true
+    case 'Stop': {
+      // turn complete -> reset in-flight counters; flag for attention if not focused.
+      // A session with no prompt this conversation (fresh, or just /clear-ed — clear zeroes
+      // lastPromptTs) has nothing for the user to see: never mark it waiting/unseen, or
+      // auto-focus would jump to an empty chat.
+      const hasConvo = s.lastPromptTs > 0
+      next.status = focused || !hasConvo ? 'idle' : 'waiting'
+      next.unseen = !focused && hasConvo
       next.awaitingInput = false
       next.agentsActive = 0
       next.toolsActive = 0
@@ -343,8 +347,10 @@ export function applyEvent(s: SessionState, evt: HookEvent, focused: boolean): S
       next.skillRuns = s.skillRuns.map((r) => (r.endedAt === null ? { ...r, endedAt: evt.ts } : r))
       next.subagents = s.subagents.map((sa) => (sa.status === 'running' ? { ...sa, status: 'done' as const } : sa))
       break
+    }
     case 'Notification':
-      if (!focused) {
+      // same guard as Stop: an empty (fresh / just-cleared) chat never demands attention
+      if (!focused && s.lastPromptTs > 0) {
         next.unseen = true
         if (next.status !== 'busy') next.status = 'waiting'
       }
@@ -352,6 +358,13 @@ export function applyEvent(s: SessionState, evt: HookEvent, focused: boolean): S
     case 'SessionStart':
       next.status = 'idle'
       next.awaitingInput = false
+      // /clear wipes the conversation: drop the pinned last-prompt bar (it belongs to the
+      // discarded conversation) and the resumeId (resuming it would bring the old convo back).
+      if (d.source === 'clear') {
+        next.lastPrompt = ''
+        next.lastPromptTs = 0
+        next.resumeId = undefined
+      }
       break
   }
 

@@ -17,6 +17,8 @@ export interface TermHandle {
   refresh: () => void
   interrupt: () => void
   clear: () => void
+  /** drop the scrollback only — the visible screen stays (used when claude is /clear-ed) */
+  clearScrollback: () => void
   focus: () => void
 }
 
@@ -138,6 +140,9 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     },
     interrupt: () => window.orbit.sessionInput(props.sessionId, '\x1b'),
     clear: () => termRef.current?.clear(),
+    // ED 3 (CSI 3 J) erases only the saved-lines buffer, so claude's freshly painted
+    // post-/clear screen survives — just the old conversation above it goes away.
+    clearScrollback: () => termRef.current?.write('\x1b[3J'),
     focus: () => termRef.current?.focus()
   }))
 
