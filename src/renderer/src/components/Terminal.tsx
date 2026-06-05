@@ -48,10 +48,12 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const spawnedRef = useRef(false)
-  // marks the buffer line of the most recent prompt; xterm keeps its `.line` updated as the
-  // buffer scrolls, so we can tell when the prompt has moved above the viewport.
-  const markerRef = useRef<IMarker | null>(null)
-  const [pinned, setPinned] = useState(false)
+  // one marker per prompt submitted this live session, oldest first; xterm keeps each `.line`
+  // updated as the buffer scrolls, so we can tell which prompts are above the viewport.
+  const promptsRef = useRef<{ marker: IMarker; text: string }[]>([])
+  // the prompt currently shown pinned = the nearest one above the viewport top
+  const pinnedEntryRef = useRef<{ marker: IMarker; text: string } | null>(null)
+  const [pinnedText, setPinnedText] = useState<string | null>(null)
   // true while the viewport is scrolled up off the live bottom — shows the ↓ jump button
   const [scrolledUp, setScrolledUp] = useState(false)
   // latest onTitle, so the once-only create effect always calls the current callback
@@ -61,24 +63,37 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   const lastPromptRef = useRef(props.lastPrompt)
   lastPromptRef.current = props.lastPrompt
 
-  // Decide whether the last-prompt bar should be pinned.
-  //  • If we have a marker (a prompt submitted during this live session) we know its exact line,
-  //    so pin while that line is above the viewport top — covers both a long auto-scrolling
-  //    response and the user manually scrolling up. A disposed marker (-1, scrollback trimmed it
-  //    away) is definitely above view.
-  //  • Otherwise (a resumed/refreshed conversation we never saw submitted) we only have the prompt
-  //    text, not its line, so fall back to "is the user scrolled up off the live bottom".
+  // Decide which prompt the pinned bar should show.
+  //  • With markers (prompts submitted during this live session) we know each prompt's line, so
+  //    pin the *nearest* prompt strictly above the viewport top — as the user scrolls up past a
+  //    prompt, the bar switches to the one before it. A disposed marker (-1, scrollback trimmed
+  //    it away) is definitely above view.
+  //  • Otherwise (a resumed/refreshed conversation we never saw submitted) we only have the last
+  //    prompt's text, not its line, so fall back to "is the user scrolled up off the live bottom".
   const evalPin = useCallback((): void => {
     const term = termRef.current
     if (!term) {
-      setPinned(false)
+      pinnedEntryRef.current = null
+      setPinnedText(null)
       setScrolledUp(false)
       return
     }
     const buf = term.buffer.active
-    const m = markerRef.current
-    if (m) setPinned(m.line === -1 || m.line < buf.viewportY)
-    else setPinned(!!lastPromptRef.current && buf.viewportY < buf.baseY)
+    const prompts = promptsRef.current
+    let entry: { marker: IMarker; text: string } | null = null
+    // scan newest → oldest for the first prompt above the viewport top
+    for (let i = prompts.length - 1; i >= 0; i--) {
+      const line = prompts[i].marker.line
+      if (line === -1 || line < buf.viewportY) {
+        entry = prompts[i]
+        break
+      }
+    }
+    pinnedEntryRef.current = entry
+    if (entry) setPinnedText(entry.text)
+    else if (!prompts.length && lastPromptRef.current && buf.viewportY < buf.baseY)
+      setPinnedText(lastPromptRef.current)
+    else setPinnedText(null)
     // "bottom" = following the live end of the buffer (latest output + input box visible)
     setScrolledUp(buf.viewportY < buf.baseY)
   }, [])
@@ -115,12 +130,13 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     // a corrected size to the pty afterwards if the bounds weren't final yet.
     refit()
     term.reset()
-    // the reset wipes the buffer, so any prompt marker now points at gone content — drop it and
-    // unpin. A resumed/refreshed conversation gets a fresh marker only on its next prompt (we
-    // can't know where Claude re-renders an old prompt in the replayed scrollback).
-    markerRef.current?.dispose()
-    markerRef.current = null
-    setPinned(false)
+    // the reset wipes the buffer, so the prompt markers now point at gone content — drop them and
+    // unpin. A resumed/refreshed conversation gets fresh markers only from its next prompt (we
+    // can't know where Claude re-renders old prompts in the replayed scrollback).
+    for (const p of promptsRef.current) p.marker.dispose()
+    promptsRef.current = []
+    pinnedEntryRef.current = null
+    setPinnedText(null)
     setScrolledUp(false)
     window.orbit.createSession({
       sessionId: props.sessionId,
@@ -249,8 +265,9 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
       titleSub.dispose()
       scrollSub.dispose()
       writeSub.dispose()
-      markerRef.current?.dispose()
-      markerRef.current = null
+      for (const p of promptsRef.current) p.marker.dispose()
+      promptsRef.current = []
+      pinnedEntryRef.current = null
       offData()
       offExit()
       term.dispose()
@@ -285,14 +302,23 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   }, [props.theme])
 
   // a new prompt was submitted: drop a marker at the cursor (≈ where the prompt rendered) so we
-  // can track when it scrolls out of view. The prompt is at the bottom right now, so unpin.
+  // can track every prompt's position. The new prompt is at the bottom right now, so unpin.
   useEffect(() => {
     const term = termRef.current
     if (!term || props.kind !== 'claude' || !props.lastPromptTs) return
-    markerRef.current?.dispose()
-    markerRef.current = term.registerMarker(0) ?? null
-    setPinned(false)
-  }, [props.lastPromptTs, props.kind])
+    const marker = term.registerMarker(0)
+    if (marker) promptsRef.current.push({ marker, text: props.lastPrompt ?? '' })
+    // drop markers the scrollback already trimmed away, keeping only the most recent trimmed one
+    // (it still marks "everything before here is above view"). Bounds the array on long sessions.
+    const prompts = promptsRef.current
+    let firstAlive = prompts.findIndex((p) => p.marker.line !== -1)
+    if (firstAlive === -1) firstAlive = prompts.length
+    if (firstAlive > 1) {
+      for (const p of prompts.splice(0, firstAlive - 1)) p.marker.dispose()
+    }
+    pinnedEntryRef.current = null
+    setPinnedText(null)
+  }, [props.lastPromptTs, props.lastPrompt, props.kind])
 
   // becoming active -> the pane was hidden (0-size) or just un-hidden; re-fit once layout
   // has actually settled (two frames, since display:none -> flex resolves over a frame) and
@@ -314,19 +340,22 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
   return (
     <div className="terminal-host">
-      {pinned && props.lastPrompt && (
+      {pinnedText && (
         <button
           className="prompt-pin"
-          title={props.lastPrompt}
+          title={pinnedText}
           onClick={() => {
             const term = termRef.current
-            const m = markerRef.current
+            const m = pinnedEntryRef.current?.marker
+            // jump to the pinned prompt; the bar then re-evaluates to the prompt above it, so
+            // repeated clicks walk up prompt-by-prompt to the start of the chat. A trimmed
+            // marker (or the resumed-session fallback) means everything is above — go to top.
             if (m && m.line >= 0) term?.scrollToLine(m.line)
-            else term?.scrollToBottom()
+            else term?.scrollToTop()
           }}
         >
           <span className="prompt-pin-icon">❯</span>
-          <span className="prompt-pin-text">{props.lastPrompt}</span>
+          <span className="prompt-pin-text">{pinnedText}</span>
         </button>
       )}
       {scrolledUp && (
