@@ -22,6 +22,10 @@ interface ProjectStats {
   agents: number
   busy: boolean
   waiting: boolean
+  /** per-state chat counts: actively working / standing & waiting for you / idle */
+  busyN: number
+  waitingN: number
+  idleN: number
 }
 
 /** All paths covered by a project row: itself + every nested subproject. */
@@ -36,11 +40,19 @@ function collectPaths(p: Project): string[] {
 function statsFor(sessions: SessionState[], project: Project): ProjectStats {
   const paths = new Set(collectPaths(project))
   const mine = sessions.filter((s) => paths.has(s.projectPath))
+  // a chat blocked on the user (finished turn / question / unseen output) counts as waiting,
+  // even though a pending question technically reads as "busy"
+  const isWaiting = (s: SessionState): boolean => s.status === 'waiting' || s.awaitingInput || s.unseen
+  const waitingN = mine.filter(isWaiting).length
+  const busyN = mine.filter((s) => s.status === 'busy' && !isWaiting(s)).length
   return {
     open: mine.length,
     agents: mine.reduce((n, s) => n + s.agentsActive, 0),
     busy: mine.some((s) => s.status === 'busy'),
-    waiting: mine.some((s) => s.unseen)
+    waiting: mine.some((s) => s.unseen),
+    busyN,
+    waitingN,
+    idleN: mine.length - busyN - waitingN
   }
 }
 
@@ -151,8 +163,13 @@ function ProjectRow({
           </span>
         )}
         {st.open > 0 && (
-          <span className={`open-count state-${state}`} title={`${st.open} open session(s)`}>
-            {st.open}
+          <span
+            className={`open-count state-${state}`}
+            title={`${st.open} open chat(s): ${st.busyN} working · ${st.waitingN} waiting for you · ${st.idleN} idle`}
+          >
+            {st.busyN > 0 && <span className="cnt busy">{st.busyN}</span>}
+            {st.waitingN > 0 && <span className="cnt waiting">{st.waitingN}</span>}
+            {st.idleN > 0 && <span className="cnt idle">{st.idleN}</span>}
           </span>
         )}
         {isHidden && <span className="proj-hidden" title="hidden">🚫</span>}
