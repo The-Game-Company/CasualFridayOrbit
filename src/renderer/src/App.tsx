@@ -1186,8 +1186,8 @@ export default function App(): JSX.Element {
   }
 
   /**
-   * Close one window. If it's the tab's last window, the tab closes too — except when it's
-   * also the only tab left: closing it would leave zero tabs (which looks broken), so we no-op.
+   * Close one window. If it's the tab's last window, the tab closes too; closing the very
+   * last tab falls back to another open project's tab, or the empty state if none remain.
    */
   function closeWindow(windowId: string): void {
     const tab = tabs.find((t) => tabWindows(t).includes(windowId))
@@ -1204,7 +1204,6 @@ export default function App(): JSX.Element {
     // Drop the window from its column; an emptied column is removed (columns to its right shift left).
     const columns = tab.columns.map((c) => c.filter((w) => w !== windowId)).filter((c) => c.length > 0)
     const remaining = columns.flat()
-    if (remaining.length === 0 && tabs.length === 1) return
     snapshotClosed(windowId)
     setSessions((prev) => prev.filter((s) => s.id !== windowId))
     if (remaining.length > 0) {
