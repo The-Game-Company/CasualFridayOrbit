@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FileNode } from '../../../shared/events'
+import type { FileNode, KeyDoc } from '../../../shared/events'
 
 function ext(name: string): string {
   const i = name.lastIndexOf('.')
@@ -8,34 +8,25 @@ function ext(name: string): string {
 function fileIcon(name: string): string {
   const e = ext(name)
   const n = name.toLowerCase()
-  // Images
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif'].includes(e)) return '🖼'
-  // Markdown
   if (['md', 'mdx', 'markdown'].includes(e)) return '✎'
-  // JSON / JSONL
   if (e === 'json' || e === 'jsonc') return '{}'
   if (e === 'jsonl' || e === 'ndjson') return '{…}'
-  // CSV/TSV
   if (e === 'csv' || e === 'tsv') return '⊞'
-  // Diff/patch
   if (e === 'diff' || e === 'patch') return '±'
-  // Log files
   if (e === 'log') return '▤'
-  // .env files
   if (n === '.env' || n.startsWith('.env.') || e === 'env') return '🔑'
-  // Config formats
   if (['yaml', 'yml', 'toml', 'ini', 'conf'].includes(e)) return '⚙'
-  // Shell scripts
   if (['sh', 'bash', 'zsh', 'fish', 'ps1'].includes(e)) return '$'
-  // SQL
   if (e === 'sql') return '⊛'
-  // Code files
   if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'cs', 'py', 'go', 'rs', 'c', 'cpp', 'h', 'hpp', 'java', 'kt', 'rb', 'swift'].includes(e)) return '<>'
-  // HTML/CSS
   if (['html', 'htm', 'css', 'scss', 'sass', 'less'].includes(e)) return '</>'
-  // XML
   if (e === 'xml') return '<x>'
   return '·'
+}
+
+function shortAgent(name: string): string {
+  return name.replace(/^claude-\d{4}-\d{2}-\d{2}-/, '')
 }
 
 // ─── normal (lazy) tree ──────────────────────────────────────────────────────
@@ -108,7 +99,6 @@ interface VNode {
 }
 
 function buildSearchTree(files: FileNode[], root: string): VNode[] {
-  // detect separator from root so we reconstruct full paths correctly on Windows
   const sep = root.includes('\\') ? '\\' : '/'
   const dirMap = new Map<string, VNode>()
   const roots: VNode[] = []
@@ -181,18 +171,106 @@ function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFil
   )
 }
 
+// ─── recents panel ───────────────────────────────────────────────────────────
+
+const CONTEXT_NAMES = new Set(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.mcp.json'])
+const COORD_NAMES = new Set(['WIP.md', 'STATUS.md', 'INITIATIVES.md', 'ASSISTANT_RULES.md'])
+
+function docTag(name: string): 'ctx' | 'coord' | 'doc' {
+  if (CONTEXT_NAMES.has(name)) return 'ctx'
+  if (COORD_NAMES.has(name)) return 'coord'
+  return 'doc'
+}
+
+const RECENTS_HEIGHT_KEY = 'orbit.recentsHeight'
+const RECENTS_OPEN_KEY = 'orbit.recentsOpen'
+const RECENTS_PIN_KEY = 'orbit.recentsPin'
+const DEFAULT_RECENTS_HEIGHT = 220
+const MIN_TREE_HEIGHT = 80
+const MIN_RECENTS_HEIGHT = 56
+
+function fileParts(path: string, root: string | null): { name: string; dir: string } {
+  const norm = path.replace(/\\/g, '/')
+  const name = norm.split('/').pop() ?? path
+  const normRoot = root ? root.replace(/\\/g, '/') : ''
+  const rel = normRoot && norm.startsWith(normRoot) ? norm.slice(normRoot.length).replace(/^\//, '') : norm
+  const parts = rel.split('/')
+  const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+  return { name, dir }
+}
+
+interface RecentsPanelProps {
+  items: string[]
+  root: string | null
+  busy: Set<string>
+  isLeased: (path: string) => boolean
+  getBusyAgent: (path: string) => string | null
+  getLeasedBy: (path: string) => string | null
+  onOpenFile: (path: string) => void
+  pinnedTags: Map<string, 'ctx' | 'coord' | 'doc'>
+}
+
+function RecentsPanel({ items, root, busy, isLeased, getBusyAgent, getLeasedBy, onOpenFile, pinnedTags }: RecentsPanelProps): JSX.Element {
+  if (items.length === 0) {
+    return <div className="ctx-empty">no recent files yet</div>
+  }
+  return (
+    <>
+      {items.map((path) => {
+        const { name, dir } = fileParts(path, root)
+        const isBusy = busy.has(path)
+        const leased = isLeased(path)
+        const agentFromBusy = isBusy ? getBusyAgent(path) : null
+        const agentFromLease = leased ? getLeasedBy(path) : null
+        const rawAgent = agentFromBusy ?? agentFromLease
+        const agentName = rawAgent ? shortAgent(rawAgent) : null
+        const inProgress = isBusy || leased
+        return (
+          <div
+            key={path}
+            className={`ft-recent-item${inProgress ? ' in-progress' : ''}`}
+            onClick={() => onOpenFile(path)}
+            title={path}
+          >
+            <span className={`ft-recent-icon${isBusy ? ' busy' : ''}`}>
+              {isBusy ? '✱' : fileIcon(name)}
+            </span>
+            <div className="ft-recent-info">
+              <div className="ft-recent-row1">
+                <span className="ft-recent-name">{name}</span>
+                {pinnedTags.has(path) && (
+                  <span className={`ft-recent-tag ft-recent-tag-${pinnedTags.get(path)}`}>
+                    {pinnedTags.get(path)}
+                  </span>
+                )}
+                {leased && !isBusy && <span className="ft-recent-lock" title="held by an agent lease">🔒</span>}
+              </div>
+              {dir && <div className="ft-recent-dir">{dir}</div>}
+              {agentName && <div className="ft-recent-agent">{agentName}</div>}
+            </div>
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
 // ─── container ───────────────────────────────────────────────────────────────
 
 interface Props {
   root: string | null
   busy: Set<string>
   recent: Set<string>
+  recentOrdered: string[]
   gitChanged: Set<string>
   isLeased: (path: string) => boolean
+  getLeasedBy: (path: string) => string | null
+  getBusyAgent: (path: string) => string | null
   onOpenFile: (path: string) => void
+  keyDocs?: KeyDoc[]
 }
 
-export function FileTree({ root, busy, recent, gitChanged, isLeased, onOpenFile }: Props): JSX.Element {
+export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeased, getLeasedBy, getBusyAgent, onOpenFile, keyDocs }: Props): JSX.Element {
   const [top, setTop] = useState<FileNode[] | null>(null)
   const [query, setQuery] = useState('')
   const [useRegex, setUseRegex] = useState(false)
@@ -201,6 +279,20 @@ export function FileTree({ root, busy, recent, gitChanged, isLeased, onOpenFile 
   const [regexError, setRegexError] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchIdRef = useRef(0)
+
+  const [pinContext, setPinContext] = useState<boolean>(() => {
+    return localStorage.getItem(RECENTS_PIN_KEY) === 'true'
+  })
+
+  const [recentsHeight, setRecentsHeight] = useState<number>(() => {
+    const v = localStorage.getItem(RECENTS_HEIGHT_KEY)
+    return v ? Math.max(MIN_RECENTS_HEIGHT, parseInt(v, 10)) : DEFAULT_RECENTS_HEIGHT
+  })
+  const [recentsOpen, setRecentsOpen] = useState<boolean>(() => {
+    return localStorage.getItem(RECENTS_OPEN_KEY) !== 'false'
+  })
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
 
   useEffect(() => {
     setTop(null)
@@ -227,7 +319,6 @@ export function FileTree({ root, busy, recent, gitChanged, isLeased, onOpenFile 
     }
     setRegexError(false)
     setSearching(true)
-    // don't clear results here — keep showing previous results while worker runs
     const id = ++searchIdRef.current
     debounceRef.current = setTimeout(() => {
       window.orbit.searchFiles(root, trimmed, useRegex).then((files) => {
@@ -241,8 +332,58 @@ export function FileTree({ root, busy, recent, gitChanged, isLeased, onOpenFile 
   const trimmed = query.trim()
   const searchTree = trimmed && results && root ? buildSearchTree(results, root) : null
 
+  // files to show in recents: currently busy (not yet in recent) + recently completed
+  const recentItems = [
+    ...Array.from(busy).filter((p) => !recentOrdered.includes(p)),
+    ...recentOrdered
+  ]
+
+  // pinned context/coord files from keyDocs, prepended (no duplicates)
+  const pinnedTags = new Map<string, 'ctx' | 'coord' | 'doc'>()
+  if (pinContext && keyDocs) {
+    for (const doc of keyDocs) pinnedTags.set(doc.path, docTag(doc.name))
+  }
+  const pinnedOnly = pinContext && keyDocs
+    ? keyDocs.map((d) => d.path).filter((p) => !recentItems.includes(p))
+    : []
+  const panelItems = [...pinnedOnly, ...recentItems]
+
+  const activeCount = panelItems.filter((p) => busy.has(p) || isLeased(p)).length
+
+  function onDividerMouseDown(e: React.MouseEvent): void {
+    e.preventDefault()
+    if (!recentsOpen) {
+      setRecentsOpen(true)
+      localStorage.setItem(RECENTS_OPEN_KEY, 'true')
+      return
+    }
+    dragRef.current = { startY: e.clientY, startH: recentsHeight }
+    const onMove = (ev: MouseEvent): void => {
+      if (!dragRef.current || !wrapRef.current) return
+      const wrapH = wrapRef.current.getBoundingClientRect().height
+      const delta = dragRef.current.startY - ev.clientY
+      const maxH = wrapH - MIN_TREE_HEIGHT - 30
+      const newH = Math.min(maxH, Math.max(MIN_RECENTS_HEIGHT, dragRef.current.startH + delta))
+      setRecentsHeight(newH)
+      localStorage.setItem(RECENTS_HEIGHT_KEY, String(Math.round(newH)))
+    }
+    const onUp = (): void => {
+      dragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  function toggleRecents(): void {
+    const next = !recentsOpen
+    setRecentsOpen(next)
+    localStorage.setItem(RECENTS_OPEN_KEY, String(next))
+  }
+
   return (
-    <div className="file-tree-wrap">
+    <div className="file-tree-wrap" ref={wrapRef}>
       <div className="file-search-bar">
         <input
           className={`file-search-input${regexError ? ' error' : ''}`}
@@ -261,47 +402,93 @@ export function FileTree({ root, busy, recent, gitChanged, isLeased, onOpenFile 
         </button>
       </div>
 
-      {trimmed ? (
-        <div className={`tree-scroll${searching ? ' search-stale' : ''}`}>
-          {regexError && <div className="ctx-empty">invalid regex</div>}
-          {!regexError && !searching && results?.length === 0 && (
-            <div className="ctx-empty">no matches</div>
+      <div className="ft-tree-body">
+        {trimmed ? (
+          <div className={`tree-scroll${searching ? ' search-stale' : ''}`}>
+            {regexError && <div className="ctx-empty">invalid regex</div>}
+            {!regexError && !searching && results?.length === 0 && (
+              <div className="ctx-empty">no matches</div>
+            )}
+            {searchTree?.map((n) => (
+              <SearchNode
+                key={n.path}
+                node={n}
+                depth={0}
+                busy={busy}
+                recent={recent}
+                gitChanged={gitChanged}
+                isLeased={isLeased}
+                onOpenFile={onOpenFile}
+              />
+            ))}
+          </div>
+        ) : (
+          <>
+            {!root && <div className="ctx-empty">open a project</div>}
+            {root && top === null && <div className="ctx-empty">reading files…</div>}
+            {top && (
+              <div className="tree-scroll">
+                {top.map((n) => (
+                  <Node
+                    key={n.path}
+                    node={n}
+                    depth={0}
+                    busy={busy}
+                    recent={recent}
+                    gitChanged={gitChanged}
+                    isLeased={isLeased}
+                    onOpenFile={onOpenFile}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="ft-divider" onMouseDown={onDividerMouseDown} title="Drag to resize recents" />
+
+      <div className="ft-recents-section">
+        <div className="ft-recents-head" onClick={toggleRecents}>
+          <span className="ft-recents-caret">{recentsOpen ? '▾' : '▸'}</span>
+          <span className="ft-recents-label">RECENTS</span>
+          {keyDocs && keyDocs.length > 0 && (
+            <label
+              className={`ft-pin-toggle${pinContext ? ' on' : ''}`}
+              title="Pin context & coordination files (CLAUDE.md, WIP.md, …)"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={pinContext}
+                onChange={(e) => {
+                  const v = e.target.checked
+                  setPinContext(v)
+                  localStorage.setItem(RECENTS_PIN_KEY, String(v))
+                }}
+              />
+              ctx files
+            </label>
           )}
-          {searchTree?.map((n) => (
-            <SearchNode
-              key={n.path}
-              node={n}
-              depth={0}
-              busy={busy}
-              recent={recent}
-              gitChanged={gitChanged}
-              isLeased={isLeased}
-              onOpenFile={onOpenFile}
-            />
-          ))}
+          {activeCount > 0 && (
+            <span className="ft-recents-badge">{activeCount} active</span>
+          )}
         </div>
-      ) : (
-        <>
-          {!root && <div className="ctx-empty">open a project</div>}
-          {root && top === null && <div className="ctx-empty">reading files…</div>}
-          {top && (
-            <div className="tree-scroll">
-              {top.map((n) => (
-                <Node
-                  key={n.path}
-                  node={n}
-                  depth={0}
-                  busy={busy}
-                  recent={recent}
-                  gitChanged={gitChanged}
-                  isLeased={isLeased}
-                  onOpenFile={onOpenFile}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
+        {recentsOpen && (
+          <div className="ft-recents-body" style={{ height: recentsHeight }}>
+            <RecentsPanel
+              items={panelItems}
+              root={root}
+              busy={busy}
+              isLeased={isLeased}
+              getBusyAgent={getBusyAgent}
+              getLeasedBy={getLeasedBy}
+              onOpenFile={onOpenFile}
+              pinnedTags={pinnedTags}
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

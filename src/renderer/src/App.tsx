@@ -401,6 +401,12 @@ export default function App(): JSX.Element {
   configRef.current = config
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+  const openFilesRef = useRef<string[]>([])
+  openFilesRef.current = openFiles
+  const activeFilePathRef = useRef<string | null>(null)
+  activeFilePathRef.current = activeFilePath
+  const prevActiveProject = useRef<string | null>(null)
+  const openFilesByProject = useRef<Record<string, { files: string[]; active: string | null }>>({});
   const widthsSeeded = useRef(false)
 
   // The active tab and, within it, the focused window (= what the toolbar/skills act on).
@@ -773,6 +779,24 @@ export default function App(): JSX.Element {
       window.orbit.getProjectInfo(activeProject).then(setProjectInfo)
       window.orbit.gitStatus(activeProject).then((paths) => setGitChanged(new Set(paths)))
     }
+  }, [activeProject])
+
+  // save/restore open editor tabs per project when openFilesPerProject is enabled
+  useEffect(() => {
+    const prev = prevActiveProject.current
+    const perProject = configRef.current?.openFilesPerProject ?? false
+    if (perProject && prev !== null && prev !== activeProject) {
+      openFilesByProject.current[prev] = {
+        files: openFilesRef.current,
+        active: activeFilePathRef.current
+      }
+    }
+    if (perProject && prev !== activeProject) {
+      const saved = activeProject !== null ? openFilesByProject.current[activeProject] : null
+      setOpenFiles(saved?.files ?? [])
+      setActiveFilePath(saved?.active ?? null)
+    }
+    prevActiveProject.current = activeProject
   }, [activeProject])
 
   // color-code the UI with the active project's declared accent (revert to theme if none)
@@ -1566,12 +1590,16 @@ export default function App(): JSX.Element {
   // union of files being touched / recently touched across ALL sessions (any agent)
   const allBusy = new Set(sessions.flatMap((s) => s.busyFiles))
   const allRecent = new Set(sessions.flatMap((s) => s.recentFiles))
+  // ordered recent files (most recent first), deduped — preserves Set insertion order
+  const allRecentOrdered = Array.from(new Set(sessions.flatMap((s) => s.recentFiles)))
   const isLeased = (p: string): boolean =>
     !!activeProject && !!coord && coord.leases.some((l) => leaseCoversPath(l.resource, p, activeProject))
   const getLeasedBy = (p: string): string | null =>
     activeProject && coord
       ? (coord.leases.find((l) => leaseCoversPath(l.resource, p, activeProject))?.agent ?? null)
       : null
+  const getBusyAgent = (p: string): string | null =>
+    sessions.find((s) => s.busyFiles.includes(p))?.title ?? null
   // the windows the grid renders right now = the active tab's live windows
   const visibleEffective = liveWindows(activeTab, sessions)
   const layout = columnLayout(liveColumns(activeTab, sessions))
@@ -1908,9 +1936,13 @@ export default function App(): JSX.Element {
                   root={activeProject}
                   busy={allBusy}
                   recent={allRecent}
+                  recentOrdered={allRecentOrdered}
                   gitChanged={gitChanged}
                   isLeased={isLeased}
+                  getLeasedBy={getLeasedBy}
+                  getBusyAgent={getBusyAgent}
                   onOpenFile={openFile}
+                  keyDocs={keyDocs}
                 />
               )}
               {rightView === 'coord' && <CoordPanel coord={coord} />}

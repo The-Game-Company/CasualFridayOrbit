@@ -235,6 +235,10 @@ export interface AppConfig {
   notifyOnDone: boolean
   /** notify when a session is waiting for input or permission (💬 / 🔐) */
   notifyOnWait: boolean
+  /** scope the RECENTS list in the Files panel to the active project only */
+  recentsPerProject?: boolean
+  /** remember and restore open editor tabs separately per project */
+  openFilesPerProject?: boolean
 }
 
 /** Plain (non-claude) shells Orbit can host. Windows: powershell/cmd; macOS/Linux: zsh/bash. */
