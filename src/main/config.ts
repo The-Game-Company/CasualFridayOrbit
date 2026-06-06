@@ -21,7 +21,16 @@ export function loadConfig(): AppConfig {
     leaseStaleMin: 20,
     leftWidth: 230,
     rightWidth: 340,
-    autoFocus: false
+    editorWidth: 520,
+    autoSave: false,
+    autoSaveDelay: 1000,
+    windowUiScale: 1,
+    uiScale: 1,
+    autoFocus: false,
+    notifyEnabled: true,
+    notifySound: false,
+    notifyOnDone: true,
+    notifyOnWait: true
   }
   try {
     const raw = fs.readFileSync(configPath(), 'utf8')

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import {
   IPC,
   type AppConfig,
@@ -38,6 +38,8 @@ const api = {
   restartMcp: (server: McpServer): Promise<McpRestartResult> =>
     ipcRenderer.invoke(IPC.McpRestart, server),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigGet),
+  /** global UI zoom for the whole window (panels, text, icons — everything) */
+  setUiZoom: (factor: number): void => webFrame.setZoomFactor(factor),
   setConfig: (cfg: AppConfig): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigSet, cfg),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.PickFolder),
   readContextFile: (path: string): Promise<string> => ipcRenderer.invoke(IPC.ContextRead, path),
@@ -60,7 +62,10 @@ const api = {
   rebuildApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.AppRebuild),
 
   // file browser + editor
+  gitStatus: (projectPath: string): Promise<string[]> => ipcRenderer.invoke(IPC.GitStatus, projectPath),
   readDir: (dir: string): Promise<FileNode[]> => ipcRenderer.invoke(IPC.ReadDir, dir),
+  searchFiles: (root: string, query: string, isRegex: boolean): Promise<FileNode[]> =>
+    ipcRenderer.invoke(IPC.SearchFiles, root, query, isRegex),
   readTextFile: (path: string): Promise<ReadFileResult> => ipcRenderer.invoke(IPC.ReadTextFile, path),
   saveTextFile: (
     path: string,
@@ -102,9 +107,20 @@ const api = {
   },
 
   // window chrome (single-bar mode): pop the hidden app menu / re-tint the native buttons
+  startWindowMove: (): void => ipcRenderer.send(IPC.WindowStartMove),
   popupAppMenu: (x: number, y: number): void => ipcRenderer.send(IPC.MenuPopup, { x, y }),
   setTitleBarTheme: (color: string, symbolColor: string): void =>
     ipcRenderer.send(IPC.TitleBarTheme, { color, symbolColor }),
+
+  // desktop notifications: report the focused session (for toast suppression) and react
+  // to a toast click by jumping to the session that raised it
+  setNotifyActiveSession: (sessionId: string | null): void =>
+    ipcRenderer.send(IPC.NotifyActiveSession, sessionId),
+  onNotifyActivate: (cb: (sessionId: string) => void): (() => void) => {
+    const fn = (_e: unknown, p: { sessionId: string }): void => cb(p.sessionId)
+    ipcRenderer.on(IPC.NotifyActivate, fn)
+    return () => ipcRenderer.removeListener(IPC.NotifyActivate, fn)
+  },
 
   // session control
   createSession: (args: CreateSessionArgs): Promise<boolean> =>

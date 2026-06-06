@@ -13,7 +13,7 @@ import { loadConfig, saveConfig } from './config'
 import { listHistory } from './history'
 import { loadWorkspace, saveWorkspace, loadWindowState, saveWindowState } from './workspace'
 import { checkUpdate, runUpdate, closeExternalClaude } from './updater'
-import { readDir, readTextFile, saveTextFile, FileWatcher } from './files'
+import { readDir, readTextFile, saveTextFile, searchFiles, FileWatcher } from './files'
 import { CoordinationWatcher } from './coordination'
 import { LogWatcher, listKeyDocs } from './logs'
 import { readProjectConfig } from './project-config'
@@ -34,12 +34,68 @@ function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
 }
 
-function notify(title: string, body: string): void {
+// ——— Desktop notifications ———————————————————————————————————————————————
+// Each notification names the project, shows what kind of attention is needed (leading
+// glyph), carries the prompt being worked on, and — when clicked — brings Orbit to the
+// front and jumps straight to the session that raised it.
+
+/** What the toast is about; drives the leading glyph + title wording. */
+type NotifyKind = 'done' | 'input' | 'permission' | 'info'
+
+const NOTIFY_GLYPH: Record<NotifyKind, string> = {
+  done: '✅',
+  input: '💬',
+  permission: '🔐',
+  info: '🔔'
+}
+
+// The renderer reports which window (session) the user is currently looking at, so we can
+// skip toasts for the session that's right in front of them.
+let activeSessionId: string | null = null
+
+function notify(opts: { kind: NotifyKind; project: string; headline: string; body: string; sessionId?: string }): void {
   try {
-    if (Notification.isSupported()) new Notification({ title, body, silent: true }).show()
+    const cfg = loadConfig()
+    if (!cfg.notifyEnabled || !Notification.isSupported()) return
+    if (opts.kind === 'done' && cfg.notifyOnDone === false) return
+    if ((opts.kind === 'input' || opts.kind === 'permission' || opts.kind === 'info') && cfg.notifyOnWait === false) return
+    // The user is already looking at this exact session — a toast would be noise.
+    if (opts.sessionId && opts.sessionId === activeSessionId && win?.isFocused()) return
+    const n = new Notification({
+      title: `${NOTIFY_GLYPH[opts.kind]} ${opts.project} — ${opts.headline}`,
+      body: opts.body,
+      silent: !cfg.notifySound,
+      icon: path.join(app.getAppPath(), 'resources', 'orbit.png'),
+      // needs-input toasts should linger until acted on (Windows honors this; no-op elsewhere)
+      timeoutType: opts.kind === 'done' ? 'default' : 'never'
+    })
+    n.on('click', () => {
+      if (!win || win.isDestroyed()) return
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      if (opts.sessionId) send(IPC.NotifyActivate, { sessionId: opts.sessionId })
+    })
+    n.show()
   } catch {
     /* ignore */
   }
+}
+
+/** "3s" / "2m 14s" / "1h 05m" — how long the turn ran, shown on done-toasts. */
+function fmtDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/** Classify claude's Notification hook message so the toast says what's actually needed. */
+function classifyMessage(msg: string): { kind: NotifyKind; headline: string } {
+  if (/permission|approve|allow/i.test(msg)) return { kind: 'permission', headline: 'permission needed' }
+  if (/waiting for (your )?input|idle|waiting/i.test(msg)) return { kind: 'input', headline: 'waiting for you' }
+  return { kind: 'info', headline: 'notification' }
 }
 
 const projectName = (cwd: unknown): string =>
@@ -48,7 +104,13 @@ const projectName = (cwd: unknown): string =>
 // Per-window reasoning effort: claude doesn't expose it to hook subprocesses when launched
 // without it in the parent env (as Orbit does), so we resolve it the way claude itself does —
 // from the settings files, most-specific first: project-local → project-shared → user-global.
+//
+// Effort is keyed per-session (not per-cwd) so that changing effort in one project window
+// doesn't corrupt other windows that fall through to the same global settings file.
 const effortCache = new Map<string, { effort: string | null; at: number }>()
+// Once a session has established its effort, remember it so subsequent events from OTHER
+// sessions changing global settings don't overwrite this session's display.
+const sessionEffort = new Map<string, string>()
 function readEffortLevel(file: string): string | null {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -57,25 +119,41 @@ function readEffortLevel(file: string): string | null {
     return null
   }
 }
-function resolveEffort(cwd: unknown): string | null {
+function resolveEffort(sessionId: string, cwd: unknown): string | null {
   if (typeof cwd !== 'string' || !cwd) return null
-  const cached = effortCache.get(cwd)
-  if (cached && Date.now() - cached.at < 1500) return cached.effort
-  const candidates = [
+
+  // Check if settings files have a project-local effort override for this cwd.
+  // Only look at project-local files — NOT the global settings — to avoid cross-session
+  // contamination when a different window changes the global effortLevel.
+  const projectCandidates = [
     path.join(cwd, '.claude', 'settings.local.json'),
     path.join(cwd, '.claude', 'settings.json'),
-    path.join(app.getPath('home'), '.claude', 'settings.json')
   ]
-  let effort: string | null = null
-  for (const f of candidates) {
+  for (const f of projectCandidates) {
     const e = readEffortLevel(f)
     if (e) {
-      effort = e
-      break
+      sessionEffort.set(sessionId, e)
+      return e
     }
   }
-  effortCache.set(cwd, { effort, at: Date.now() })
-  return effort
+
+  // No project-local setting. If this session already has a known effort, keep it —
+  // don't re-read the global file, which would pick up another window's recent change.
+  const known = sessionEffort.get(sessionId)
+  if (known) return known
+
+  // First event for this session with no project-local setting: read global as the
+  // initial value, then pin it to the session so it won't drift.
+  const cached = effortCache.get(cwd)
+  const globalEffort = cached && Date.now() - cached.at < 1500
+    ? cached.effort
+    : (() => {
+        const e = readEffortLevel(path.join(app.getPath('home'), '.claude', 'settings.json'))
+        effortCache.set(cwd, { effort: e, at: Date.now() })
+        return e
+      })()
+  if (globalEffort) sessionEffort.set(sessionId, globalEffort)
+  return globalEffort
 }
 
 const clip = (s: unknown, n = 80): string => {
@@ -83,30 +161,45 @@ const clip = (s: unknown, n = 80): string => {
   return t.length > n ? t.slice(0, n - 1) + '…' : t
 }
 
-// Remember each session's most recent prompt + project so Stop/Notification can name them.
-const lastPrompt = new Map<string, { project: string; prompt: string }>()
+// Remember each session's most recent prompt + project + when it was submitted, so
+// Stop/Notification toasts can name them and report how long the turn took.
+const lastPrompt = new Map<string, { project: string; prompt: string; ts: number }>()
 
 function onHookEvent(evt: HookEvent): void {
   const d = evt.data ?? {}
-  // stamp the live effort (read from settings, keyed on this event's project dir)
-  const effort = resolveEffort(d.cwd)
+  // stamp the live effort (read from settings, pinned per session to avoid cross-window drift)
+  const effort = resolveEffort(evt.sessionId, d.cwd)
   if (effort) evt.effort = effort
   send(IPC.HookEvent, evt)
   const project = projectName(d.cwd)
 
   if (evt.event === 'UserPromptSubmit' && d.prompt) {
-    lastPrompt.set(evt.sessionId, { project, prompt: clip(d.prompt) })
+    lastPrompt.set(evt.sessionId, { project, prompt: clip(d.prompt), ts: evt.ts })
   }
 
-  // Light-touch desktop notifications, enriched with project + the prompt being worked on.
+  // Desktop notifications: glyph for the kind of attention needed, project + prompt for
+  // context, turn duration on completion, and click-to-jump to the session.
   if (evt.event === 'Stop') {
     const ctx = lastPrompt.get(evt.sessionId)
-    notify(`${ctx?.project ?? project} — done`, ctx?.prompt ? `“${ctx.prompt}”` : 'Turn complete')
+    const took = ctx?.ts ? ` in ${fmtDuration(evt.ts - ctx.ts)}` : ''
+    notify({
+      kind: 'done',
+      project: ctx?.project ?? project,
+      headline: `done${took}`,
+      body: ctx?.prompt ? `”${ctx.prompt}”` : 'Turn complete',
+      sessionId: evt.sessionId
+    })
   }
   if (evt.event === 'Notification' && d.message) {
     const ctx = lastPrompt.get(evt.sessionId)
-    const body = ctx?.prompt ? `${clip(d.message, 90)}\n“${ctx.prompt}”` : clip(d.message, 140)
-    notify(ctx?.project ?? project, body)
+    const { kind, headline } = classifyMessage(String(d.message))
+    notify({
+      kind,
+      project: ctx?.project ?? project,
+      headline,
+      body: ctx?.prompt ? `${clip(d.message, 90)}\n”${ctx.prompt}”` : clip(d.message, 140),
+      sessionId: evt.sessionId
+    })
   }
 }
 
@@ -201,7 +294,7 @@ function createWindow(): void {
     // bar doubles as the titlebar (drag region + ☰ menu button), and the OS min/max/close
     // buttons are overlaid on its right edge. Colors are re-tinted per theme via IPC.
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#1b1e26', symbolColor: '#8b93a7', height: 34 },
+    titleBarOverlay: { color: '#1b1e26', symbolColor: '#8b93a7', height: 38 },
     icon: path.join(app.getAppPath(), 'resources', 'orbit.ico'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -260,6 +353,8 @@ function createWindow(): void {
 function registerIpc(): void {
   // The native menu bar is hidden (single-bar chrome) — the tab bar's ☰ button pops the
   // same application menu up at its own position instead. Accelerators work either way.
+  ipcMain.on(IPC.WindowStartMove, () => { win?.startWindowMove?.() })
+
   ipcMain.on(IPC.MenuPopup, (_e, p: { x: number; y: number }) => {
     if (win) Menu.getApplicationMenu()?.popup({ window: win, x: Math.round(p.x), y: Math.round(p.y) })
   })
@@ -267,7 +362,7 @@ function registerIpc(): void {
   // Re-tint the overlaid native window buttons when the renderer switches themes.
   ipcMain.on(IPC.TitleBarTheme, (_e, p: { color: string; symbolColor: string }) => {
     try {
-      win?.setTitleBarOverlay({ color: p.color, symbolColor: p.symbolColor, height: 34 })
+      win?.setTitleBarOverlay({ color: p.color, symbolColor: p.symbolColor, height: 38 })
     } catch {
       // overlay re-tinting isn't supported on this platform (macOS) — keep launch colors
     }
@@ -301,7 +396,27 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.HistoryList, (_e, projectPath: string) => listHistory(projectPath))
 
+  ipcMain.handle(IPC.GitStatus, (_e, projectPath: string): Promise<string[]> => {
+    return new Promise((resolve) => {
+      const proc = spawn('git', ['status', '--porcelain', '-uall'], { cwd: projectPath })
+      let out = ''
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString() })
+      proc.on('close', () => {
+        const paths: string[] = []
+        for (const line of out.split('\n')) {
+          if (line.length < 4) continue
+          const rel = line.slice(3).trim()
+          if (rel) paths.push(path.join(projectPath, rel))
+        }
+        resolve(paths)
+      })
+      proc.on('error', () => resolve([]))
+    })
+  })
+
   ipcMain.handle(IPC.ReadDir, (_e, dir: string) => readDir(dir))
+  ipcMain.handle(IPC.SearchFiles, (_e, root: string, query: string, isRegex: boolean) =>
+    searchFiles(root, query, isRegex))
   ipcMain.handle(IPC.ReadTextFile, (_e, file: string) => readTextFile(file))
   ipcMain.handle(IPC.SaveTextFile, (_e, a: { path: string; content: string; baselineHash: string; force: boolean }) =>
     saveTextFile(a.path, a.content, a.baselineHash, a.force)
@@ -351,7 +466,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.KeyDocs, (_e, projectPath: string) => listKeyDocs(projectPath))
   ipcMain.handle(IPC.ProjectInfo, (_e, projectPath: string) => {
     const c = readProjectConfig(projectPath)
-    return { commands: c.commands, accent: c.accent }
+    return { commands: c.commands, prompts: c.prompts, accent: c.accent }
   })
   ipcMain.on(IPC.LogWatch, (_e, projectPath: string) => logWatcher?.watch(projectPath))
   ipcMain.on(IPC.LogUnwatch, () => logWatcher?.unwatch())
@@ -383,6 +498,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.SessionClose, (_e, sessionId: string) => {
     sessions?.close(sessionId)
     return true
+  })
+
+  // Renderer keeps us posted on which session is in front, so notify() can suppress
+  // toasts for the session the user is already watching.
+  ipcMain.on(IPC.NotifyActiveSession, (_e, sessionId: string | null) => {
+    activeSessionId = sessionId
   })
 
   ipcMain.on(IPC.SessionInput, (_e, arg: { sessionId: string; data: string }) =>

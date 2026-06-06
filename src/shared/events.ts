@@ -17,9 +17,16 @@ export interface OrbitCommand {
   shell?: ShellKind
 }
 
+/** A project-declared quick prompt — inserted into the focused claude window and submitted. */
+export interface QuickPrompt {
+  label: string
+  prompt: string
+}
+
 /** Project-declared UI metadata surfaced by Orbit. */
 export interface ProjectInfo {
   commands: OrbitCommand[]
+  prompts: QuickPrompt[]
   accent: string | null
 }
 
@@ -199,6 +206,12 @@ export interface AppConfig {
   leftWidth: number
   /** width (px) of the right context/activity column — drag the divider to resize */
   rightWidth: number
+  /** width (px) of the file editor side panel — drag its left edge to resize */
+  editorWidth?: number
+  /** auto-save files after a period of no changes (idle timer) */
+  autoSave?: boolean
+  /** milliseconds of idle before auto-save triggers */
+  autoSaveDelay?: number
   /** relative heights of the left column's sections (projects / skills / mcp) — drag the
    *  dividers between them to give one section more room than the others */
   leftSplit?: number[]
@@ -210,6 +223,18 @@ export interface AppConfig {
   /** auto-jump to a session that just finished and wants input, but only while the session
    *  you're looking at is busy (so you're never yanked away mid-read/type) */
   autoFocus: boolean
+  /** scale of the chat-window chrome (pane title bar, pinned prompt, jump arrow, quick prompts) */
+  windowUiScale: number
+  /** global UI zoom for the whole app — panels, titles, text, icons, buttons, terminals */
+  uiScale: number
+  /** master switch for OS desktop notifications (done / needs input / permission) */
+  notifyEnabled: boolean
+  /** play the OS notification sound (off = silent toasts) */
+  notifySound: boolean
+  /** notify when a session finishes a turn (✅ done) */
+  notifyOnDone: boolean
+  /** notify when a session is waiting for input or permission (💬 / 🔐) */
+  notifyOnWait: boolean
 }
 
 /** Plain (non-claude) shells Orbit can host. Windows: powershell/cmd; macOS/Linux: zsh/bash. */
@@ -337,6 +362,8 @@ export const IPC = {
   AppRelaunch: 'app:relaunch',
   AppRebuild: 'app:rebuild',
   ReadDir: 'files:readDir',
+  SearchFiles: 'files:search',
+  GitStatus: 'git:status',
   ReadTextFile: 'files:readText',
   SaveTextFile: 'files:saveText',
   ClipboardRead: 'clipboard:read',
@@ -354,6 +381,10 @@ export const IPC = {
   // window chrome (single-bar mode: tab bar acts as the titlebar)
   MenuPopup: 'menu:popup',
   TitleBarTheme: 'titlebar:theme',
+  WindowStartMove: 'win:startMove',
+  // desktop notifications
+  NotifyActivate: 'notify:activate',
+  NotifyActiveSession: 'notify:activeSession',
   // session control
   SessionCreate: 'session:create',
   SessionClose: 'session:close',

@@ -69,6 +69,43 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
             />
           </label>
 
+          <label className="field">
+            <span>Global UI size</span>
+            <div className="field-slider">
+              <input
+                type="range"
+                min={80}
+                max={200}
+                step={5}
+                value={Math.round((config.uiScale || 1) * 100)}
+                onChange={(e) => onChange({ ...config, uiScale: Number(e.target.value) / 100 })}
+              />
+              <span className="field-slider-val">{Math.round((config.uiScale || 1) * 100)}%</span>
+            </div>
+          </label>
+          <div className="field-hint">
+            Zooms the entire app — side panels, titles, text, icons, buttons and terminals.
+          </div>
+
+          <label className="field">
+            <span>Window UI size</span>
+            <div className="field-slider">
+              <input
+                type="range"
+                min={80}
+                max={200}
+                step={5}
+                value={Math.round((config.windowUiScale || 1) * 100)}
+                onChange={(e) => onChange({ ...config, windowUiScale: Number(e.target.value) / 100 })}
+              />
+              <span className="field-slider-val">{Math.round((config.windowUiScale || 1) * 100)}%</span>
+            </div>
+          </label>
+          <div className="field-hint">
+            Scales just the chat-window chrome — title bar at the bottom, pinned prompt, jump
+            arrow and quick-prompt buttons.
+          </div>
+
           <label className="field-check">
             <input
               type="checkbox"
@@ -93,6 +130,50 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
             While the session you're watching is busy, jump to another window the moment it
             finishes and wants your input.
           </div>
+
+          <label className="field-check">
+            <input
+              type="checkbox"
+              checked={config.notifyEnabled}
+              onChange={(e) => onChange({ ...config, notifyEnabled: e.target.checked })}
+            />
+            <span>Desktop notifications</span>
+          </label>
+          <div className="field-hint">
+            Toast when a session finishes (✅), waits for input (💬) or needs permission (🔐).
+            Clicking a toast jumps straight to that session. Nothing fires for the session
+            you&apos;re already looking at.
+          </div>
+
+          <label className="field-check">
+            <input
+              type="checkbox"
+              disabled={!config.notifyEnabled}
+              checked={config.notifyOnDone ?? true}
+              onChange={(e) => onChange({ ...config, notifyOnDone: e.target.checked })}
+            />
+            <span>Notify when done (✅)</span>
+          </label>
+
+          <label className="field-check">
+            <input
+              type="checkbox"
+              disabled={!config.notifyEnabled}
+              checked={config.notifyOnWait ?? true}
+              onChange={(e) => onChange({ ...config, notifyOnWait: e.target.checked })}
+            />
+            <span>Notify when waiting for input or permission (💬 🔐)</span>
+          </label>
+
+          <label className="field-check">
+            <input
+              type="checkbox"
+              disabled={!config.notifyEnabled}
+              checked={config.notifySound}
+              onChange={(e) => onChange({ ...config, notifySound: e.target.checked })}
+            />
+            <span>Notification sound</span>
+          </label>
 
           <label className="field">
             <span>Log folders (LOGS tab, comma-separated)</span>
@@ -120,6 +201,31 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
               onChange={(e) => onChange({ ...config, leaseStaleMin: Number(e.target.value) || config.leaseStaleMin })}
             />
           </label>
+
+          <label className="field-check">
+            <input
+              type="checkbox"
+              checked={config.autoSave ?? false}
+              onChange={(e) => onChange({ ...config, autoSave: e.target.checked })}
+            />
+            <span>Auto-save files after idle</span>
+          </label>
+          <div className="field-hint">
+            Automatically saves open files after a short pause in typing. Ctrl+S always saves immediately.
+          </div>
+          {(config.autoSave ?? false) && (
+            <label className="field">
+              <span>Auto-save delay (ms)</span>
+              <input
+                type="number"
+                min={500}
+                max={10000}
+                step={500}
+                value={config.autoSaveDelay ?? 1000}
+                onChange={(e) => onChange({ ...config, autoSaveDelay: Math.max(500, Number(e.target.value) || 1000) })}
+              />
+            </label>
+          )}
         </div>
       </div>
     </div>
