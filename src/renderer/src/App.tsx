@@ -31,6 +31,7 @@ import { UpdateModal } from './components/UpdateModal'
 import { ContextPanel } from './components/ContextPanel'
 import { FileTree } from './components/FileTree'
 import { EditorModal } from './components/EditorModal'
+import { FileTypesHelp } from './components/FileTypesHelp'
 import { CoordPanel } from './components/CoordPanel'
 import { LogPanel } from './components/LogPanel'
 import { SubAgents } from './components/SubAgents'
@@ -352,12 +353,17 @@ export default function App(): JSX.Element {
   const [started, setStarted] = useState<Set<string>>(new Set())
   const [projMenu, setProjMenu] = useState<{ path: string; x: number; y: number } | null>(null)
   const [rightView, setRightView] = useState<'context' | 'files' | 'coord' | 'logs'>('context')
-  const [editorPath, setEditorPath] = useState<string | null>(null)
-  const [editorDocked, setEditorDocked] = useState(false)
+  const [openFiles, setOpenFiles] = useState<string[]>([])
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
+  const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set())
+  const [editorWidth, setEditorWidth] = useState(520)
+  const [closeRequestedFor, setCloseRequestedFor] = useState<string | null>(null)
+  const [showEditorHelp, setShowEditorHelp] = useState(false)
   const [coord, setCoord] = useState<CoordState | null>(null)
   const [log, setLog] = useState<LogState | null>(null)
+  const [gitChanged, setGitChanged] = useState<Set<string>>(new Set())
   const [keyDocs, setKeyDocs] = useState<KeyDoc[]>([])
-  const [projectInfo, setProjectInfo] = useState<ProjectInfo>({ commands: [], accent: null })
+  const [projectInfo, setProjectInfo] = useState<ProjectInfo>({ commands: [], prompts: [], accent: null })
   // side-column widths (px), drag the dividers to resize; seeded from + persisted to config
   const [widths, setWidths] = useState({ left: 230, right: 340 })
   // side columns collapsed to a thin strip (chevron on the divider / strip toggles)
@@ -388,6 +394,7 @@ export default function App(): JSX.Element {
   const lastSaved = useRef<string>('')
   const widthsRef = useRef(widths)
   widthsRef.current = widths
+  const editorWidthRef = useRef(520)
   const splitsRef = useRef(splits)
   splitsRef.current = splits
   const configRef = useRef<AppConfig | null>(config)
@@ -405,6 +412,8 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     activeIdRef.current = activeId
+    // keep main posted on the focused session, so it can skip toasts the user is already seeing
+    window.orbit.setNotifyActiveSession(activeId)
   }, [activeId])
   useEffect(() => {
     activeProjectRef.current = activeProject
@@ -415,6 +424,8 @@ export default function App(): JSX.Element {
     if (config && !widthsSeeded.current) {
       widthsSeeded.current = true
       setWidths({ left: config.leftWidth ?? 230, right: config.rightWidth ?? 340 })
+      editorWidthRef.current = config.editorWidth ?? 520
+      setEditorWidth(config.editorWidth ?? 520)
       setCollapsed({ left: !!config.leftCollapsed, right: !!config.rightCollapsed })
       // section heights only apply when the stored count matches (stale data degrades to defaults)
       setSplits((s) => ({
@@ -463,6 +474,54 @@ export default function App(): JSX.Element {
         leftWidth: widthsRef.current.left,
         rightWidth: widthsRef.current.right
       })
+  }
+
+  // Drag the left edge of the editor panel to resize it
+  const startEditorResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = editorWidthRef.current
+    const clamp = (n: number): number => Math.max(320, Math.min(1400, n))
+    const onMove = (ev: MouseEvent): void => {
+      const next = clamp(startW - (ev.clientX - startX))
+      editorWidthRef.current = next
+      setEditorWidth(next)
+    }
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      const cfg = configRef.current
+      if (cfg) window.orbit.setConfig({ ...cfg, editorWidth: editorWidthRef.current })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  const openFile = (path: string): void => {
+    setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
+    setActiveFilePath(path)
+  }
+
+  const closeFile = (path: string): void => {
+    setOpenFiles((prev) => {
+      const next = prev.filter((p) => p !== path)
+      setActiveFilePath((active) => {
+        if (active !== path) return active
+        const idx = prev.indexOf(path)
+        return next[idx] ?? next[idx - 1] ?? null
+      })
+      return next
+    })
+    setDirtyFiles((prev) => { const n = new Set(prev); n.delete(path); return n })
+  }
+
+  const handleTabClose = (path: string): void => {
+    if (dirtyFiles.has(path)) {
+      setActiveFilePath(path)
+      setCloseRequestedFor(path)
+    } else {
+      closeFile(path)
+    }
   }
 
   // Start dragging the horizontal divider between section i and i+1 of a side column. Works in
@@ -705,12 +764,14 @@ export default function App(): JSX.Element {
     setCoord(null)
     setLog(null)
     setKeyDocs([])
-    setProjectInfo({ commands: [], accent: null })
+    setProjectInfo({ commands: [], prompts: [], accent: null })
+    setGitChanged(new Set())
     if (activeProject) {
       window.orbit.coordWatch(activeProject)
       window.orbit.logWatch(activeProject)
       window.orbit.listKeyDocs(activeProject).then(setKeyDocs)
       window.orbit.getProjectInfo(activeProject).then(setProjectInfo)
+      window.orbit.gitStatus(activeProject).then((paths) => setGitChanged(new Set(paths)))
     }
   }, [activeProject])
 
@@ -747,6 +808,16 @@ export default function App(): JSX.Element {
     // project's accent override on top so a theme switch doesn't drop it
     if (projectInfo.accent) document.documentElement.style.setProperty('--accent', projectInfo.accent)
   }, [config?.theme, projectInfo.accent])
+
+  // UI scaling: uiScale zooms the whole window (panels, text, icons, terminals alike);
+  // windowUiScale scales just the chat-window chrome via the --window-ui-scale CSS var
+  // (pane title bar, pinned prompt, jump arrow, quick prompts). Terminals refit themselves
+  // automatically — the zoom changes their layout size, which fires their ResizeObserver.
+  useEffect(() => {
+    if (!config) return
+    window.orbit.setUiZoom(config.uiScale || 1)
+    document.documentElement.style.setProperty('--window-ui-scale', String(config.windowUiScale || 1))
+  }, [config?.uiScale, config?.windowUiScale])
 
   // claude reads its TUI theme once, at spawn — so a live session can't recolor on the fly.
   // When the appearance flips (dark <-> light), refresh each live claude session by relaunching
@@ -812,6 +883,13 @@ export default function App(): JSX.Element {
       }),
     [updateSession]
   )
+
+  // A desktop-notification click: main has already raised the window; jump to the session
+  // that raised the toast. (Ref-indirected so the subscription survives re-renders without
+  // capturing a stale focusWindow closure.)
+  const focusWindowRef = useRef<(id: string) => void>(() => {})
+  focusWindowRef.current = focusWindow
+  useEffect(() => window.orbit.onNotifyActivate((id) => focusWindowRef.current(id)), [])
 
   // open Settings / History from the app menu (hidden bar — popped via the tab bar's ☰,
   // or driven directly by its accelerators)
@@ -1490,9 +1568,9 @@ export default function App(): JSX.Element {
   const allRecent = new Set(sessions.flatMap((s) => s.recentFiles))
   const isLeased = (p: string): boolean =>
     !!activeProject && !!coord && coord.leases.some((l) => leaseCoversPath(l.resource, p, activeProject))
-  const editorLeasedBy =
-    editorPath && activeProject && coord
-      ? (coord.leases.find((l) => leaseCoversPath(l.resource, editorPath, activeProject))?.agent ?? null)
+  const getLeasedBy = (p: string): string | null =>
+    activeProject && coord
+      ? (coord.leases.find((l) => leaseCoversPath(l.resource, p, activeProject))?.agent ?? null)
       : null
   // the windows the grid renders right now = the active tab's live windows
   const visibleEffective = liveWindows(activeTab, sessions)
@@ -1500,7 +1578,26 @@ export default function App(): JSX.Element {
   const menuTab = tabMenu ? tabs.find((t) => t.id === tabMenu.id) ?? null : null
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      onMouseDown={(e) => {
+        const EDGE = 6
+        const { clientX: x, clientY: y } = e
+        const { innerWidth: w, innerHeight: h } = window
+        if (x <= EDGE || y <= EDGE || x >= w - EDGE || y >= h - EDGE) {
+          window.orbit.startWindowMove()
+          return
+        }
+        // panel-head areas and collapsed col-strips are secondary drag handles
+        const t = e.target as Element
+        if (
+          (t.closest('.panel-head') && !t.closest('button, .panel-head-toggle, .seg, .help-trigger')) ||
+          t.closest('.col-strip')
+        ) {
+          window.orbit.startWindowMove()
+        }
+      }}
+    >
       {/* single top bar: doubles as the window titlebar (native title/menu bars are hidden) */}
       <TabBar
         tabs={projectTabs}
@@ -1549,7 +1646,7 @@ export default function App(): JSX.Element {
             <McpPanel
               servers={mcpServers}
               activeMcp={active?.mcpActive ?? []}
-              onOpenFile={setEditorPath}
+              onOpenFile={openFile}
             />
           </div>
         </aside>
@@ -1573,7 +1670,7 @@ export default function App(): JSX.Element {
 
         <main className="col col-center">
           <CommandBar commands={projectInfo.commands} onRun={runCommand} />
-          <div className={`center-body ${editorDocked && editorPath ? 'split' : ''}`}>
+          <div className={`center-body ${openFiles.length > 0 ? 'split' : ''}`}>
           <div
             className="terminals"
             style={{
@@ -1657,6 +1754,7 @@ export default function App(): JSX.Element {
                       theme={config.theme}
                       lastPrompt={s.lastPrompt}
                       lastPromptTs={s.lastPromptTs}
+                      quickPrompts={projectInfo.prompts}
                       onTitle={(t) => retitleFromTerminal(s.id, t)}
                     />
                   </Pane>
@@ -1667,16 +1765,59 @@ export default function App(): JSX.Element {
               )
             })}
           </div>
-          {editorDocked && editorPath && (
-            <div className="editor-dock">
-              <EditorModal
-                path={editorPath}
-                busy={allBusy.has(editorPath)}
-                leasedBy={editorLeasedBy}
-                docked
-                onToggleDock={() => setEditorDocked(false)}
-                onClose={() => setEditorPath(null)}
-              />
+          {openFiles.length > 0 && (
+            <div className="editor-dock" style={{ flex: `0 0 ${editorWidth}px` }}>
+              <div className="editor-resizer" onMouseDown={startEditorResize} />
+              <div className="editor-tab-bar">
+                {openFiles.map((p) => (
+                  <button
+                    key={p}
+                    className={`editor-tab${p === activeFilePath ? ' active' : ''}${dirtyFiles.has(p) ? ' dirty' : ''}`}
+                    onClick={() => setActiveFilePath(p)}
+                  >
+                    {dirtyFiles.has(p) && <span className="tab-dot">*</span>}
+                    {p.split(/[\\/]/).pop() || p}
+                    <span
+                      className="tab-close"
+                      onClick={(e) => { e.stopPropagation(); handleTabClose(p) }}
+                    >×</span>
+                  </button>
+                ))}
+                <button
+                  className={`editor-tab-help-btn${showEditorHelp ? ' on' : ''}`}
+                  onClick={() => setShowEditorHelp((v) => !v)}
+                  title="Supported file types &amp; features"
+                >?</button>
+              </div>
+              <div className="editor-instances">
+                {openFiles.map((p) => (
+                  <div
+                    key={p}
+                    className="editor-instance"
+                    style={{ display: p === activeFilePath ? 'flex' : 'none' }}
+                  >
+                    <EditorModal
+                      path={p}
+                      busy={allBusy.has(p)}
+                      leasedBy={getLeasedBy(p)}
+                      autoSave={config?.autoSave ?? false}
+                      autoSaveDelay={config?.autoSaveDelay ?? 1000}
+                      shouldConfirmClose={closeRequestedFor === p}
+                      onConfirmCloseHandled={() => setCloseRequestedFor(null)}
+                      onDirtyChange={(isDirty) =>
+                        setDirtyFiles((prev) => {
+                          const n = new Set(prev)
+                          if (isDirty) n.add(p)
+                          else n.delete(p)
+                          return n
+                        })
+                      }
+                      onClose={() => closeFile(p)}
+                    />
+                  </div>
+                ))}
+              </div>
+              {showEditorHelp && <FileTypesHelp onClose={() => setShowEditorHelp(false)} />}
             </div>
           )}
           </div>
@@ -1748,7 +1889,7 @@ export default function App(): JSX.Element {
               </span>
             </div>
             {(rightView === 'context' || rightView === 'files') && (
-              <DocsStrip docs={keyDocs} onOpen={setEditorPath} />
+              <DocsStrip docs={keyDocs} onOpen={openFile} />
             )}
             <div className="rt-body">
               {rightView === 'context' && (
@@ -1758,7 +1899,7 @@ export default function App(): JSX.Element {
                   recent={allRecent}
                   active={!!active}
                   isLeased={isLeased}
-                  onOpenFile={setEditorPath}
+                  onOpenFile={openFile}
                 />
               )}
               {rightView === 'files' && (
@@ -1767,8 +1908,9 @@ export default function App(): JSX.Element {
                   root={activeProject}
                   busy={allBusy}
                   recent={allRecent}
+                  gitChanged={gitChanged}
                   isLeased={isLeased}
-                  onOpenFile={setEditorPath}
+                  onOpenFile={openFile}
                 />
               )}
               {rightView === 'coord' && <CoordPanel coord={coord} />}
@@ -1901,16 +2043,6 @@ export default function App(): JSX.Element {
         />
       )}
 
-      {editorPath && !editorDocked && (
-        <EditorModal
-          path={editorPath}
-          busy={allBusy.has(editorPath)}
-          leasedBy={editorLeasedBy}
-          docked={false}
-          onToggleDock={() => setEditorDocked(true)}
-          onClose={() => setEditorPath(null)}
-        />
-      )}
     </div>
   )
 }
