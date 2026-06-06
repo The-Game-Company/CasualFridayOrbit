@@ -67,14 +67,25 @@ const NOTIFY_GLYPH: Record<NotifyKind, string> = {
 // skip toasts for the session that's right in front of them.
 let activeSessionId: string | null = null
 
+// Anti-spam: the same kind of toast for the same session won't repeat within this window
+// (claude re-sends idle/permission Notification hooks while it waits — one nag is enough).
+const NOTIFY_COOLDOWN_MS = 60_000
+const lastNotified = new Map<string, number>()
+
 function notify(opts: { kind: NotifyKind; project: string; headline: string; body: string; sessionId?: string }): void {
   try {
     const cfg = loadConfig()
     if (!cfg.notifyEnabled || !Notification.isSupported()) return
     if (opts.kind === 'done' && cfg.notifyOnDone === false) return
     if ((opts.kind === 'input' || opts.kind === 'permission' || opts.kind === 'info') && cfg.notifyOnWait === false) return
-    // The user is already looking at this exact session — a toast would be noise.
-    if (opts.sessionId && opts.sessionId === activeSessionId && win?.isFocused()) return
+    // The user is looking at Orbit right now — the UI already shows every session's
+    // status, so any toast is noise regardless of which session raised it.
+    if (win?.isFocused()) return
+    // Dedup: same kind for the same session within the cooldown → drop.
+    const dedupKey = `${opts.sessionId ?? opts.project}:${opts.kind}`
+    const prev = lastNotified.get(dedupKey)
+    if (prev !== undefined && Date.now() - prev < NOTIFY_COOLDOWN_MS) return
+    lastNotified.set(dedupKey, Date.now())
     const n = new Notification({
       title: `${NOTIFY_GLYPH[opts.kind]} ${opts.project} — ${opts.headline}`,
       body: opts.body,
@@ -196,12 +207,17 @@ function onHookEvent(evt: HookEvent): void {
 
   if (evt.event === 'UserPromptSubmit' && d.prompt) {
     lastPrompt.set(evt.sessionId, { project, prompt: clip(d.prompt), ts: evt.ts })
+    // A new turn resets the anti-spam cooldowns — its completion/waits deserve fresh toasts.
+    for (const k of lastNotified.keys()) if (k.startsWith(`${evt.sessionId}:`)) lastNotified.delete(k)
   }
 
   // Desktop notifications: glyph for the kind of attention needed, project + prompt for
   // context, turn duration on completion, and click-to-jump to the session.
   if (evt.event === 'Stop') {
     const ctx = lastPrompt.get(evt.sessionId)
+    // Quick turns aren't worth a toast — the user almost certainly just asked and is
+    // still looking; only longer turns mean they may have wandered off.
+    if (ctx?.ts && evt.ts - ctx.ts < 15_000) return
     const took = ctx?.ts ? ` in ${fmtDuration(evt.ts - ctx.ts)}` : ''
     notify({
       kind: 'done',
