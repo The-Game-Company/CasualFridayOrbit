@@ -22,6 +22,20 @@ import { fixGuiPath } from './shell-path'
 import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type McpServer, type WorkspaceState } from '../shared/events'
 
 
+// Single-instance guard: only one Orbit may run. If a second copy is launched, it exits
+// immediately and the existing instance gets a 'second-instance' event to bring its
+// window to the front instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  })
+}
+
 let win: BrowserWindow | null = null
 let hookServer: HookServer | null = null
 let sessions: SessionManager | null = null
