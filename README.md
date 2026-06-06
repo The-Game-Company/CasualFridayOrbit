@@ -2,10 +2,9 @@
 
 # ◆ Orbit
 
-**A local desktop wrapper around the Claude Code CLI.**
+**A desktop app for Claude Code — multi-session, multi-project, reactive.**
 
-Run your already-installed, already-logged-in `claude` behind a reactive, multi-session UI —
-**no API key, no separate auth.** If you're logged in, Orbit uses your subscription.
+No API key. No separate auth. If you're subscribed to Claude, Orbit uses it.
 
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2b6cb0)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -16,257 +15,162 @@ Run your already-installed, already-logged-in `claude` behind a reactive, multi-
 
 ---
 
-## Contents
-
-- [Quick start](#quick-start)
-- [Features](#features)
-- [How it works](#how-it-works)
-- [Per-project config (`.orbit.json`)](#per-project-config-orbitjson)
-- [Project layout](#project-layout)
-- [Notes & limitations](#notes--limitations)
-
----
-
 ## Quick start
 
 > [!NOTE]
-> Orbit drives your **logged-in** `claude`. After installing the CLI, run `claude` once and
-> sign in with your subscription (no API key). The setup scripts below install it for you if
-> it's missing.
+> Orbit drives your **logged-in** `claude` CLI. The setup scripts install it if it's missing — then run `claude` once to sign in.
 
-### macOS — easiest (no commands)
+**macOS:** double-click `Install Orbit (macOS).command` → installs everything, adds to Applications + Dock.
 
-After cloning, **double-click `Install Orbit (macOS).command`** in the project folder. It
-installs everything (Node, the Claude Code CLI, dependencies), builds Orbit, and puts it in
-your **Applications and Dock** — like any normal Mac app. Then open Terminal once, run
-`claude`, and sign in (no API key).
+**Windows:** double-click `Install Orbit (Windows).cmd` → installs everything, adds Desktop + Start Menu shortcuts.
 
-### Windows — easiest (no commands)
-
-After cloning, **double-click `Install Orbit (Windows).cmd`** in the project folder. It installs
-everything (Node, the Claude Code CLI, dependencies), builds Orbit, and adds **Desktop and Start
-Menu** shortcuts — then opens it. You'll only see a Windows administrator prompt if Node has to be
-installed. The first time, run `claude` once (or sign in from Orbit's terminal pane) with your
-subscription (no API key).
-
-### One-shot setup (from a terminal)
-
-Installs Node + the Claude Code CLI if missing, installs dependencies, then runs or builds.
-
-**macOS** (Apple Silicon or Intel):
+<details>
+<summary>Terminal / manual install</summary>
 
 ```bash
-./scripts/setup-mac.sh --install   # build + install to /Applications & Dock (same as the double-click)
-./scripts/setup-mac.sh             # or just launch dev mode (hot reload)
-./scripts/setup-mac.sh --dmg       # or build a .dmg / .zip
+# macOS
+./scripts/setup-mac.sh --install   # build + install to /Applications
+./scripts/setup-mac.sh             # dev mode
+
+# Windows
+pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1             # dev mode
+pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -Installer  # NSIS installer
+
+# Manual
+npm install && npm run dev         # dev mode
+npm run dist:installer             # build installer
 ```
 
-**Windows**:
+> If `npm run dev` fails with `Error: Electron uninstall`, run `node ./node_modules/electron/install.js`.
 
-```powershell
-pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1             # set up, then launch dev
-pwsh -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -Installer  # set up, then NSIS installer
-```
-
-### Manual
-
-```bash
-npm install
-npm run dev               # dev server + hot reload
-npm run dist              # package an unpacked app   → dist/
-npm run dist:installer    # Windows: NSIS .exe  ·  macOS: .dmg + .zip
-```
-
-> [!TIP]
-> If `npm run dev` fails with `Error: Electron uninstall`, the Electron binary didn't
-> download during install — run `node ./node_modules/electron/install.js`.
+</details>
 
 > [!IMPORTANT]
-> macOS builds are unsigned. On first launch, right-click the app → **Open**
-> (or `xattr -dr com.apple.quarantine Orbit.app`).
+> macOS builds are unsigned. First launch: right-click → **Open** (or `xattr -dr com.apple.quarantine Orbit.app`).
 
 ---
 
 ## Features
 
-- **Many CLIs at once, grouped by project.** Each project keeps its own set of live
-  `claude` terminals. Switching projects keeps every session running in the background;
-  you come back to exactly where you left off. `＋` adds another CLI to the current project.
-- **Faithful terminal feed.** The real `claude` TUI runs in a pseudo-terminal and is
-  rendered with xterm.js (custom font + theme). Permission prompts, slash menus, etc. all
-  still work.
-- **Reactive status everywhere** (driven by Claude Code hooks):
-  - per-tab + per-project **status dots** (idle / busy-pulsing / amber "waiting"),
-  - **agent counters** — how many subagents (`Task`) are running right now, per tab and
-    summed per project,
-  - **active skill** highlighted in the Skills panel + a title-bar flash,
-  - **files currently being edited/read** highlighted (pulsing) in the Context tree, with
-    recently-touched files tinted.
-- **"Waiting for you" indicator.** When a background session finishes (`Stop`) or needs
-  input (`Notification`) while you're looking elsewhere, its tab + project get an amber
-  pulse, plus a desktop notification.
-- **Session persistence + auto-resume.** The whole workspace (which sessions are open per
-  project, their kinds, titles, split layout, and each chat's real claude session id) is
-  saved continuously and atomically to `userData/workspace.json`. On launch — even after a
-  crash — every previously-open chat **reopens** (the captured session id comes from the
-  `session_id` in the hook payloads).
-- **Lazy-resume (no startup burst).** Restored tabs reopen *paused* (dimmed, ⏸). A chat's
-  `claude --resume <id>` (or a shell) only actually spawns the first time you **show/focus**
-  that tab — so launching with 20 saved chats doesn't spawn 20 processes at once. The
-  currently-active project's visible pane(s) start immediately.
-- **Restore controls.** Settings has a global **Resume previous sessions on launch** toggle;
-  **right-click any project** to make just that one **start empty on launch** (marked with
-  `∅`). While the global toggle is off, the saved layout is preserved (not overwritten) so
-  re-enabling brings it back.
-- **History of past chats.** The `⟲ history` toolbar button lists previous conversations
-  for the active project (read from `~/.claude/projects/<cwd>/<id>.jsonl`, titled from the
-  first real prompt or a summary). Click one to resume it in a new tab; if it's already
-  open, it just focuses it.
-- **Parallel-agent coordination (COORD tab).** Live view of `.claude/leases/*.lease.json`
-  (resource, agent, age, stale-after-expiry), the `WIP.md` Active registry, and recent
-  `takeovers.log` — watched and refreshed on change. Files covered by a lease show a 🔒 in
-  the trees, and the editor warns when the open file is leased by another agent or being
-  written *right now* by any session's agent. (The lease "stale" window is configurable
-  in Settings — defaults to 20 min, no workflow-specific assumptions baked in.)
-- **Live subagent tree (AGENTS).** When a session dispatches `Task` subagents, each shows
-  as a node (type like `@backend`, its task, running/done) — built from the hook stream.
-- **Log tailer (LOGS tab).** Auto-tails the newest `*.log` from configurable folders
-  (default `PlayLogs, logs, Logs` — editable in Settings) for the active project, with a
-  live filter + follow toggle.
-- **Pinned docs nav.** Quick-open chips for a project's always-on docs (`CLAUDE.md`,
-  `STATUS.md`, `WIP.md`, `ASSISTANT_RULES.md`, `INITIATIVES.md`, …) with staleness ages.
-- **Non-locking, conflict-aware file editor.** Edit context files *or* any project file
-  (Context ⇄ Files toggle in the right panel; the Files tree is a lazy project browser).
-  Opening a file caches a snapshot + baseline hash and **never locks it**. While your
-  buffer is clean it **live-refreshes** as the file changes on disk; the moment you start
-  editing it freezes and, if the file then changes (an agent/the project), shows a
-  "changed on disk" banner. If *any* session's agent is currently writing the file you get
-  a "not a good time" warning. **Save is the only write**: it compares the disk hash to
-  your baseline and, on divergence, offers **Overwrite / Reload-latest / Cancel** — exactly
-  like Notepad++. `.md` files open in a **rendered Markdown view** with an Edit toggle.
-  The editor can run as a full overlay or be **docked beside the terminals** (⤡ toggle) so
-  you can edit while watching agents work.
-- **Skills browser.** Lists project + user skills; click one to drop `/skill ` into the
-  active session.
-- **Projects / Context / Activity panels**, a **session toolbar** (interrupt, restart,
-  `--continue`, clear, font size), and **persisted settings** (projects folder w/ picker,
-  theme, font size).
+<details>
+<summary><b>Sessions & projects</b> — many Claude tabs, one window</summary>
 
----
+- Open as many Claude sessions as you want per project, split side-by-side or stacked.
+- Switch projects without killing anything — every session keeps running in the background.
+- Add plain terminal tabs (PowerShell, cmd, zsh, bash) alongside Claude.
+- Sidebar shows live per-project counts: **working / waiting / idle**.
 
-## How it works
+</details>
 
-```
-   Electron MAIN (Node)                              Electron RENDERER (React)
- ┌──────────────────────────────────────┐         ┌────────────────────────────────────┐
- │ SessionManager: N× PtySession         │   IPC   │ Projects │  tabs + N× xterm │ Context│
- │   each spawns claude in a PTY,        │◄───────►│  Skills  │  toolbar         │ Activity│
- │   cwd = project, NO api key           │         └────────────────────────────────────┘
- │   claude --settings <temp.json>       │
- │                                       │   each hook runs hook-forwarder.cjs, which
- │ http server 127.0.0.1:<port> ◄─hooks──┤   POSTs {sessionId, event, data} to us
- │   tags events by ORBIT_SESSION_ID      │   → session-model.applyEvent() derives all
- │                                       │     the reactive state (status/agents/files…)
- │ chokidar per session ─ context files ─┤   → Context tree
- └──────────────────────────────────────┘
-```
+<details>
+<summary><b>Live status</b> — see what Claude is doing at a glance</summary>
 
-Three independent signal sources:
+Status dots, agent counters, and file highlights update in real time from Claude Code hooks — no polling.
 
-1. **Terminal feed** — interactive `claude` in a PTY (`@lydell/node-pty`, a prebuilt
-   N-API build → **no C++ compiler needed**), rendered by xterm.js.
-2. **Structured events** — hooks injected **only into our spawned sessions** via
-   `claude --settings <temp.json>` (merges with, never clobbers, your global settings).
-   A tiny forwarder POSTs each hook payload to a localhost server, tagged with the
-   session id (`ORBIT_SESSION_ID`) so events route to the right tab. `PreToolUse`/
-   `PostToolUse` drive busy/agent/file/skill state; `Stop`/`Notification` drive the
-   "waiting for you" state.
-3. **Context files** — one `chokidar` watch per session; independent of the CLI.
+- Per-tab and per-project **status dots**: idle, busy (pulsing), waiting (amber).
+- **Agent counters** showing how many subagents are running right now.
+- **Files being read or written** pulse in the context tree.
+- **Active skill** highlighted in the Skills panel with a title-bar flash.
 
-> [!NOTE]
-> **No-API-key guarantee:** Orbit spawns the real `claude` with your normal environment and
-> deliberately `delete`s `ANTHROPIC_API_KEY`. If you're logged in, it uses your subscription.
-> It never uses `--bare` (the only mode that ignores your OAuth login).
+</details>
+
+<details>
+<summary><b>Alerts</b> — know when Claude needs you</summary>
+
+When a background session finishes or hits a permission prompt, its tab pulses amber and a desktop notification fires. Click the notification to jump straight to that session.
+
+Notification types (done, waiting, permission) and sound are configurable in Settings.
+
+</details>
+
+<details>
+<summary><b>Session persistence</b> — pick up exactly where you left off</summary>
+
+Your whole workspace — every project, tab, split layout, and chat — is saved continuously and fully restored on relaunch, even after a crash.
+
+- Tabs restore **paused** and only spawn their process when you focus them (20 saved sessions = 0 processes started until you look).
+- Right-click any project to mark it **start empty on launch** (`∅`).
+- Global toggle in Settings to disable resume without losing the saved layout.
+- `⟲` button lists past conversations; click any to resume in a new tab.
+
+</details>
+
+<details>
+<summary><b>File editor</b> — edit while watching Claude work</summary>
+
+A full CodeMirror editor docked beside the terminals (or as a full overlay — toggle with `⤡`). Multi-tab, conflict-aware:
+
+- Live-refreshes while your buffer is clean; freezes the moment you start typing.
+- If the file changed on disk while you were editing: **Overwrite / Reload / Cancel**.
+- Warns if an agent is actively writing the file right now.
+
+Typed viewers per file: `.md` (rendered Markdown), `.json`, `.csv`, `.log` (auto-tailing), images, diffs.
+
+</details>
+
+<details>
+<summary><b>File browser</b> — search and git status at a glance</summary>
+
+Full project file tree with background-threaded search (fast on large repos) and **git status badges** on every file and folder.
+
+</details>
+
+<details>
+<summary><b>Panels</b> — Skills, MCP, Subagents, Logs, COORD</summary>
+
+- **Skills** — lists project + user skills; click to insert `/skill` into the active session. Active skill highlights live.
+- **MCP** — every configured server with live status; expand for details, right-click to restart.
+- **Subagents** — live tree of running `Task` subagents: type, task, status.
+- **Logs** — auto-tails the newest `.log` from configurable folders, with live filter + follow toggle.
+- **COORD** — for parallel-agent setups: active leases grouped by agent, WIP.md registry, takeover log. Leased files show 🔒 in the file tree; the editor warns before you touch one.
+
+</details>
+
+<details>
+<summary><b>Quick prompts & commands</b> — one click, no typing</summary>
+
+- **Quick-prompt buttons** float over the focused Claude window — click to type and submit a preset prompt ("Check the logs", "Commit and push", etc.).
+- **Command bar** buttons open a terminal tab running a preset shell command.
+
+Both are configured per project in `.orbit.json`.
+
+</details>
+
+<details>
+<summary><b>Keyboard shortcuts</b></summary>
+
+| | |
+|---|---|
+| `Ctrl+T` | New tab |
+| `Ctrl+\` | Split window |
+| `Ctrl+W` / `Ctrl+Shift+W` | Close / undo-close window |
+| `Ctrl+1…9` | Jump to Nth tab |
+| `Alt+←/→/↑/↓` | Move between splits and tabs |
+| `Ctrl+Shift+↑/↓` | Previous / next project |
+| `Ctrl+,` / `Ctrl+H` / `Ctrl+/` | Settings / History / Shortcuts |
+
+</details>
 
 ---
 
 ## Per-project config (`.orbit.json`)
 
-Orbit's collision detection has two tiers:
-
-1. **Universal (zero-config):** Orbit injects its own hooks into every session it
-   spawns, so the `busyFiles` / 🔒-in-tree / "an agent is writing this now" signals work on
-   **any** project with no convention at all.
-2. **Optional (adapter-driven):** the COORD panel reads a project's lease/WIP files. Their
-   format is **not hardcoded** — Orbit reads a project's own `.orbit.json` declaration,
-   falling back to sensible defaults. So if a project changes its lease format, it edits its
-   `.orbit.json`, **not Orbit**. A project with no `.orbit.json` just uses the
-   defaults (and the panel is empty if it has no such files — it can never break the app,
-   since this is read-only).
-
-Drop a `.orbit.json` at a project root to declare your layout — see
-[`orbit.example.json`](orbit.example.json) for every field. Beyond coordination, the
-same manifest also drives:
+Drop a `.orbit.json` at a project root — every field is optional. See [`orbit.example.json`](orbit.example.json) for all options.
 
 | Field | What it does |
-| --- | --- |
-| `commands` | Quick buttons in the command bar; each opens a shell session running the command (e.g. tail newest log, a repo's verify cmd). |
-| `prompts` | Quick-prompt buttons floating on the focused claude window (e.g. "Check Logs", "Commit & push"); clicking one types the prompt into claude and submits it. |
-| `subprojects` | Monorepo members shown nested in the Projects panel, each a full project with its own context/COORD/config. Auto-detected from a `*.code-workspace` if omitted. |
-| `accent` | A hex color that color-codes the project across its tabs/UI. |
-| `docs` | The exact always-on docs for the pinned-docs strip. |
+|---|---|
+| `prompts` | Quick-prompt buttons on the Claude window |
+| `commands` | Command bar shell buttons |
+| `accent` | Hex color to identify this project across the UI |
+| `docs` | Pinned docs strip files (`CLAUDE.md`, `WIP.md`, etc.) |
+| `logDirs` | Folders the LOGS panel watches |
+| `subprojects` | Monorepo members (auto-detected from `*.code-workspace` if omitted) |
+| `coordination` | Lease dir, field names, WIP file — for parallel-agent setups |
 
 ---
 
-## Project layout
+## Notes
 
-```
-src/
-  main/
-    index.ts            app lifecycle, window, IPC, desktop notifications
-    session-manager.ts  owns N sessions (PTY + context watcher each)
-    pty.ts              resolve the claude binary + spawn it in a PTY (per session)
-    shell-path.ts       recover the login-shell PATH for Finder-launched apps (macOS)
-    hook-server.ts      localhost server receiving hook events (tagged by session)
-    settings-inject.ts  temp settings.json + hook-forwarder.cjs
-    context-watch.ts    chokidar watch of context files
-    projects.ts         enumerate project folders
-    skills.ts           discover project + user skills (SKILL.md)
-    history.ts          read past claude transcripts (~/.claude/projects/<cwd>/*.jsonl)
-    workspace.ts        load/save the restartable workspace (atomic write)
-    files.ts            file browser IO + hash-based save + single-file disk watcher
-    coordination.ts     parse/watch .claude/leases + WIP.md + takeovers.log; lease↔path match
-    logs.ts             newest-log tailer + key-doc (pinned docs) listing
-    updater.ts          check/run Claude Code self-update (winget / npm)
-    config.ts           persisted settings (userData/config.json)
-  preload/index.ts      contextBridge API (window.orbit.*)
-  renderer/src/
-    App.tsx             orchestration: sessions, tabs, active project
-    session-model.ts    SessionState + applyEvent() reducer (the reactive brain)
-    themes.ts           xterm themes
-    components/         Terminal, TabBar, Toolbar, Projects, SkillsPanel, ContextPanel,
-                         FileTree, EditorModal, HistoryModal, Activity, SettingsModal, indicators
-  shared/events.ts      shared types + IPC channel names
-scripts/
-  setup-mac.sh          one-shot macOS setup (Node + Claude Code + deps + run/build)
-  setup-windows.ps1     one-shot Windows setup (same)
-  launch-mac.sh         build, then run the built app (macOS counterpart of launch.cmd)
-  gen-icon.mjs          generate orbit.ico / .png / .icns from code
-```
-
----
-
-## Notes & limitations
-
-- `--resume` fails gracefully: if a transcript was deleted, claude prints an error in that
-  pane; just restart it fresh.
-- Excluding a project from restore drops its sessions from the workspace cache on next
-  boot (they remain reachable via `⟲ history`).
-- Agent/file counters are reset on each `Stop`, so they're accurate per-turn even without
-  pairing tool ids; mid-turn they reflect in-flight `Pre`/`Post` deltas.
-- On first run in a folder, `claude` shows its **trust prompt** (and possibly a
-  **review-hooks prompt**) in the terminal — answer it there.
-- Skill detection assumes the `Skill` tool input key is `skill`/`skill_name`/`name`.
-- macOS packaging is unsigned/un-notarized — fine for a local build, but a downloaded copy
-  would need `xattr -dr com.apple.quarantine Orbit.app` (or right-click → Open) to bypass
-  Gatekeeper. Set up a Developer ID + notarization before distributing.
+- First run in a new folder: `claude` shows a trust prompt in the terminal pane — answer it there.
+- If resume fails (transcript deleted), Claude prints an error — just start a fresh session.
+- Orbit removes `ANTHROPIC_API_KEY` from every spawned session so your subscription is always used.
