@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { Worker } from 'node:worker_threads'
 import chokidar, { type FSWatcher } from 'chokidar'
 import type { ExternalChange, FileNode, ReadFileResult, SaveResult } from '../shared/events'
 
@@ -30,6 +31,22 @@ export function readDir(dir: string): FileNode[] {
       if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
       return a.name.localeCompare(b.name)
     })
+}
+
+/**
+ * Offload the file-tree walk to a dedicated worker thread so the main-process
+ * event loop stays free while searching large projects. One IPC round trip total.
+ */
+export function searchFiles(root: string, query: string, isRegex: boolean): Promise<FileNode[]> {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, 'search-worker.js')
+    const worker = new Worker(workerPath, { workerData: { root, query, isRegex } })
+    worker.once('message', ({ results }: { results: FileNode[] }) => resolve(results))
+    worker.once('error', reject)
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error(`search-worker exited with code ${code}`))
+    })
+  })
 }
 
 function looksBinary(buf: Buffer): boolean {
