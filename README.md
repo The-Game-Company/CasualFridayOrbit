@@ -211,6 +211,7 @@ same manifest also drives:
 | Field | What it does |
 | --- | --- |
 | `commands` | Quick buttons in the command bar; each opens a shell session running the command (e.g. tail newest log, a repo's verify cmd). |
+| `prompts` | Quick-prompt buttons floating on the focused claude window (e.g. "Check Logs", "Commit & push"); clicking one types the prompt into claude and submits it. |
 | `subprojects` | Monorepo members shown nested in the Projects panel, each a full project with its own context/COORD/config. Auto-detected from a `*.code-workspace` if omitted. |
 | `accent` | A hex color that color-codes the project across its tabs/UI. |
 | `docs` | The exact always-on docs for the pinned-docs strip. |

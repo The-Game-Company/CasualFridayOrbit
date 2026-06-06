@@ -36,6 +36,11 @@ export interface OrbitCommand {
 
 const SHELL_KINDS: ReadonlySet<ShellKind> = new Set(['powershell', 'cmd', 'zsh', 'bash'])
 
+export interface QuickPrompt {
+  label: string
+  prompt: string
+}
+
 export interface SubProjectDecl {
   name: string
   path: string
@@ -47,6 +52,8 @@ export interface ProjectConfig {
   logDirs?: string[]
   /** quick-command buttons surfaced in the command bar */
   commands: OrbitCommand[]
+  /** quick-prompt buttons overlaid on the focused claude window (insert + submit) */
+  prompts: QuickPrompt[]
   /** accent color (hex) to color-code this project across the UI */
   accent: string | null
   /** explicit always-on docs list (overrides the built-in pinned-docs set) */
@@ -108,6 +115,11 @@ export function readProjectConfig(projectPath: string): ProjectConfig {
           ...(SHELL_KINDS.has(c.shell) ? { shell: c.shell as ShellKind } : {})
         }))
     : []
+  const prompts: QuickPrompt[] = Array.isArray(raw.prompts)
+    ? raw.prompts
+        .filter((p: any) => p && typeof p.label === 'string' && typeof p.prompt === 'string')
+        .map((p: any) => ({ label: p.label, prompt: p.prompt }))
+    : []
   const accent = typeof raw.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw.accent) ? raw.accent : null
   const docs = Array.isArray(raw.docs) ? raw.docs.filter((x: unknown) => typeof x === 'string') : null
   const subprojects: SubProjectDecl[] = Array.isArray(raw.subprojects)
@@ -116,7 +128,7 @@ export function readProjectConfig(projectPath: string): ProjectConfig {
         .map((s: any) => ({ name: typeof s.name === 'string' ? s.name : String(s.path), path: s.path }))
     : []
 
-  return { coordination, logDirs, commands, accent, docs, subprojects }
+  return { coordination, logDirs, commands, prompts, accent, docs, subprojects }
 }
 
 /** First present, non-empty value among candidate keys. */

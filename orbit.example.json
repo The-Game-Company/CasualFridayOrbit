@@ -27,6 +27,13 @@
     { "label": "Newest PlayLog", "run": "Get-Content (Get-ChildItem PlayLogs/*.log | Sort-Object LastWriteTime -desc)[0] -Tail 60 -Wait" }
   ],
 
+  "//prompts": "Quick-prompt buttons floating on the focused claude window; clicking one types the prompt and presses Enter.",
+  "prompts": [
+    { "label": "Check Logs", "prompt": "Check the newest log for errors and summarize what you find" },
+    { "label": "Looks fixed", "prompt": "Looks fixed on my end — clean up any debug logging you added and wrap up" },
+    { "label": "Commit & push", "prompt": "Commit the current changes with a good message and push" }
+  ],
+
   "//docs": "Exact always-on docs for the pinned-docs strip (overrides the default set).",
   "docs": ["CLAUDE.md", "STATUS.md", "WIP.md", "ASSISTANT_RULES.md", "INITIATIVES.md", "DOCS.md"],
 

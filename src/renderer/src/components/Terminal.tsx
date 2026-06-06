@@ -5,7 +5,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { THEMES } from '../themes'
-import type { ThemeName, TermKind } from '../../../shared/events'
+import type { ThemeName, TermKind, QuickPrompt } from '../../../shared/events'
 
 const FONT_FAMILY =
   "'Cascadia Code', 'CaskaydiaCove Nerd Font', 'Fira Code', Consolas, 'Courier New', monospace"
@@ -39,6 +39,8 @@ interface Props {
   lastPrompt?: string
   /** bumps each time a new prompt is submitted; triggers a fresh scroll marker */
   lastPromptTs?: number
+  /** project-declared quick prompts (.orbit.json `prompts`) — buttons on the focused pane */
+  quickPrompts?: QuickPrompt[]
   /** the title claude sets on the terminal (OSC) — used to label the tab */
   onTitle?: (title: string) => void
 }
@@ -70,6 +72,8 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   //    it away) is definitely above view.
   //  • Otherwise (a resumed/refreshed conversation we never saw submitted) we only have the last
   //    prompt's text, not its line, so fall back to "is the user scrolled up off the live bottom".
+  //    Guard viewportY > 0: clicking the bar with no marker goes to the top of the buffer, and
+  //    without the guard the bar would immediately reappear and loop forever.
   const evalPin = useCallback((): void => {
     const term = termRef.current
     if (!term) {
@@ -91,7 +95,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     }
     pinnedEntryRef.current = entry
     if (entry) setPinnedText(entry.text)
-    else if (!prompts.length && lastPromptRef.current && buf.viewportY < buf.baseY)
+    else if (!prompts.length && lastPromptRef.current && buf.viewportY > 0 && buf.viewportY < buf.baseY)
       setPinnedText(lastPromptRef.current)
     else setPinnedText(null)
     // "bottom" = following the live end of the buffer (latest output + input box visible)
@@ -303,9 +307,17 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
   // a new prompt was submitted: drop a marker at the cursor (≈ where the prompt rendered) so we
   // can track every prompt's position. The new prompt is at the bottom right now, so unpin.
+  // When lastPromptTs resets to 0 (/clear or initial state), dispose stale markers and unpin.
   useEffect(() => {
     const term = termRef.current
-    if (!term || props.kind !== 'claude' || !props.lastPromptTs) return
+    if (!term || props.kind !== 'claude') return
+    if (!props.lastPromptTs) {
+      for (const p of promptsRef.current) p.marker.dispose()
+      promptsRef.current = []
+      pinnedEntryRef.current = null
+      setPinnedText(null)
+      return
+    }
     const marker = term.registerMarker(0)
     if (marker) promptsRef.current.push({ marker, text: props.lastPrompt ?? '' })
     // drop markers the scrollback already trimmed away, keeping only the most recent trimmed one
@@ -319,6 +331,18 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     pinnedEntryRef.current = null
     setPinnedText(null)
   }, [props.lastPromptTs, props.lastPrompt, props.kind])
+
+  // Quick-prompt button clicked: type the prompt into claude's input box and submit it.
+  // The text goes in as a bracketed paste (same path as Ctrl+V) so multi-line prompts don't
+  // submit early; the Enter is sent separately after a beat — bundled with the paste, claude
+  // would read the \r as a pasted newline instead of a submit.
+  const sendQuickPrompt = (text: string): void => {
+    const term = termRef.current
+    if (!term) return
+    term.paste(text)
+    setTimeout(() => window.orbit.sessionInput(props.sessionId, '\r'), 150)
+    term.focus()
+  }
 
   // becoming active -> the pane was hidden (0-size) or just un-hidden; re-fit once layout
   // has actually settled (two frames, since display:none -> flex resolves over a frame) and
@@ -371,6 +395,22 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
         </button>
       )}
       <div ref={hostRef} className="terminal-xterm" />
+      {props.kind === 'claude' && !!props.quickPrompts?.length && (
+        // docked under claude's input box (always rendered, so the terminal never resizes on
+        // focus changes); each bar sends to its own pane, dimmed while the pane isn't active
+        <div className={props.active ? 'quick-prompts' : 'quick-prompts inactive'}>
+          {props.quickPrompts.map((p, i) => (
+            <button
+              key={i}
+              className="quick-prompt-btn"
+              title={p.prompt}
+              onClick={() => sendQuickPrompt(p.prompt)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 })
