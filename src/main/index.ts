@@ -109,7 +109,8 @@ const projectName = (cwd: unknown): string =>
 // doesn't corrupt other windows that fall through to the same global settings file.
 const effortCache = new Map<string, { effort: string | null; at: number }>()
 // Once a session has established its effort, remember it so subsequent events from OTHER
-// sessions changing global settings don't overwrite this session's display.
+// sessions changing global settings don't overwrite this session's display. '' = pinned
+// "unknown": resolved once, found nothing — also must not drift to later global edits.
 const sessionEffort = new Map<string, string>()
 function readEffortLevel(file: string): string | null {
   try {
@@ -137,10 +138,10 @@ function resolveEffort(sessionId: string, cwd: unknown): string | null {
     }
   }
 
-  // No project-local setting. If this session already has a known effort, keep it —
-  // don't re-read the global file, which would pick up another window's recent change.
+  // No project-local setting. If this session already resolved once (even to "unknown"),
+  // keep that — don't re-read the global file, which would pick up another window's change.
   const known = sessionEffort.get(sessionId)
-  if (known) return known
+  if (known !== undefined) return known || null
 
   // First event for this session with no project-local setting: read global as the
   // initial value, then pin it to the session so it won't drift.
@@ -152,7 +153,7 @@ function resolveEffort(sessionId: string, cwd: unknown): string | null {
         effortCache.set(cwd, { effort: e, at: Date.now() })
         return e
       })()
-  if (globalEffort) sessionEffort.set(sessionId, globalEffort)
+  sessionEffort.set(sessionId, globalEffort ?? '')
   return globalEffort
 }
 
@@ -167,9 +168,15 @@ const lastPrompt = new Map<string, { project: string; prompt: string; ts: number
 
 function onHookEvent(evt: HookEvent): void {
   const d = evt.data ?? {}
-  // stamp the live effort (read from settings, pinned per session to avoid cross-window drift)
-  const effort = resolveEffort(evt.sessionId, d.cwd)
-  if (effort) evt.effort = effort
+  // Stamp the live effort. CLAUDE_EFFORT from the hook env is authoritative when present —
+  // it's per-session and tracks mid-session /effort changes — so pin and prefer it; only
+  // fall back to the settings-file guess (pinned per session) when claude didn't export it.
+  if (evt.effort) {
+    sessionEffort.set(evt.sessionId, evt.effort)
+  } else {
+    const effort = resolveEffort(evt.sessionId, d.cwd)
+    if (effort) evt.effort = effort
+  }
   send(IPC.HookEvent, evt)
   const project = projectName(d.cwd)
 
