@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webFrame } from 'electron'
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import {
   IPC,
   type AppConfig,
@@ -27,6 +27,9 @@ import {
 const api = {
   /** Host platform, so the renderer can offer the right shells (powershell/cmd vs zsh/bash). */
   platform: process.platform,
+
+  /** Filesystem path of a File dropped from the OS (File.path is gone in modern Electron). */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
   // queries
   listProjects: (): Promise<{ root: string; projects: Project[] }> =>

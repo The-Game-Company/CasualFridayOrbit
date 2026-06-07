@@ -1,4 +1,12 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type DragEvent
+} from 'react'
 import { Terminal as XTerm, type IMarker } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -348,6 +356,27 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     term.focus()
   }
 
+  // Files/folders dragged in from the OS (Explorer/Finder): type their paths into the session,
+  // each wrapped in quotes so paths with spaces survive. Internal pane-rearrange drags carry
+  // text/plain, not Files, so they fall through to the grid's own drop handling untouched.
+  const [dropActive, setDropActive] = useState(false)
+  const isFileDrag = (e: DragEvent): boolean => e.dataTransfer.types.includes('Files')
+  const handleDrop = (e: DragEvent): void => {
+    setDropActive(false)
+    if (!isFileDrag(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    const paths = Array.from(e.dataTransfer.files)
+      .map((f) => window.orbit.getPathForFile(f))
+      .filter(Boolean)
+    if (!paths.length) return
+    const term = termRef.current
+    if (!term) return
+    // bracketed paste (same as Ctrl+V) so claude treats it as typed text, never a submit
+    term.paste(paths.map((p) => `"${p}"`).join(' ') + ' ')
+    term.focus()
+  }
+
   // becoming active -> the pane was hidden (0-size) or just un-hidden; re-fit once layout
   // has actually settled (two frames, since display:none -> flex resolves over a frame) and
   // then focus. Without the second frame the first measurement can still be the stale width.
@@ -367,7 +396,20 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   }, [props.active, refit])
 
   return (
-    <div className="terminal-host">
+    <div
+      className={dropActive ? 'terminal-host file-drop' : 'terminal-host'}
+      onDragOver={(e) => {
+        if (!isFileDrag(e)) return
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = 'copy'
+        setDropActive(true)
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropActive(false)
+      }}
+      onDrop={handleDrop}
+    >
       {pinnedText && (
         <button
           className="prompt-pin"

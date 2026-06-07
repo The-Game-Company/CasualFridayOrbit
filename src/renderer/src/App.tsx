@@ -1419,6 +1419,23 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject, activeTabId, tabs, sessions, resizeSplit])
 
+  // OS file drops are only meaningful on a terminal (which handles them itself, capturing the
+  // event). Anywhere else, swallow the drop — Electron's default would navigate the window to
+  // the dropped file's file:// URL, replacing the whole app.
+  useEffect(() => {
+    // (Event, not DragEvent — the React DragEvent type imported above shadows the DOM one)
+    const block = (e: Event): void => {
+      const dt = (e as { dataTransfer?: DataTransfer | null }).dataTransfer
+      if (dt?.types.includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', block)
+    window.addEventListener('drop', block)
+    return () => {
+      window.removeEventListener('dragover', block)
+      window.removeEventListener('drop', block)
+    }
+  }, [])
+
   // Dismiss the auto-focus highlight as soon as the user does anything (types, clicks, or
   // navigates) — that's the signal they've seen the jump and taken over the window.
   useEffect(() => {
