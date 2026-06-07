@@ -141,8 +141,10 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
   onBufferChangeRef.current = onBufferChange
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
-  // Track the last value we pushed INTO the view so we don't echo it back
+  // Track the last value that crossed the editor↔parent boundary (either direction) so we
+  // can tell our own push echoing back as a prop from a genuine external change
   const lastPushed = useRef(buffer)
+  const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -150,10 +152,27 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
     const lang = getLanguage(path)
     const langExts = lang ? (Array.isArray(lang) ? lang : [lang]) : []
 
+    // Push the document up to the modal at most a few times a second. doc.toString() is
+    // O(doc) — running it (plus the modal's dirty compare) on every keystroke/undo froze
+    // the app on multi-MB files; CodeMirror itself handles big docs fine.
+    const flushPush = (): void => {
+      if (pushTimer.current) {
+        clearTimeout(pushTimer.current)
+        pushTimer.current = null
+      }
+      const view = viewRef.current
+      if (!view) return
+      const val = view.state.doc.toString()
+      if (val === lastPushed.current) return
+      lastPushed.current = val
+      onBufferChangeRef.current(val)
+    }
+
     const saveKeymap = keymap.of([
       {
         key: 'Mod-s',
         run: () => {
+          flushPush() // the modal saves bufferRef — make sure it holds the latest doc
           onSaveRef.current?.()
           return true
         },
@@ -162,10 +181,16 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
 
     const updateListener = EditorView.updateListener.of((update) => {
       if (!update.docChanged) return
-      const val = update.state.doc.toString()
-      if (val !== lastPushed.current) {
-        onBufferChangeRef.current(val)
-      }
+      if (pushTimer.current) clearTimeout(pushTimer.current)
+      pushTimer.current = setTimeout(flushPush, 150)
+    })
+
+    // flush on blur so clicking Save/Close/another tab always sees the final text
+    const blurFlush = EditorView.domEventHandlers({
+      blur: () => {
+        flushPush()
+        return false
+      },
     })
 
     const state = EditorState.create({
@@ -201,6 +226,7 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
         saveKeymap,
         ...langExts,
         updateListener,
+        blurFlush,
         editorTheme,
       ],
     })
@@ -210,6 +236,10 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
     viewRef.current = view
 
     return () => {
+      if (pushTimer.current) {
+        clearTimeout(pushTimer.current)
+        pushTimer.current = null
+      }
       view.destroy()
       viewRef.current = null
     }
@@ -219,11 +249,13 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
 
   // Sync external buffer changes (disk refresh, reload, etc.) into the editor
   useEffect(() => {
+    // our own (debounced) push echoing back as a prop — same string instance, nothing to do
+    if (buffer === lastPushed.current) return
     const view = viewRef.current
     if (!view) return
     const current = view.state.doc.toString()
+    lastPushed.current = buffer
     if (current !== buffer) {
-      lastPushed.current = buffer
       view.dispatch({ changes: { from: 0, to: current.length, insert: buffer } })
     }
   }, [buffer])

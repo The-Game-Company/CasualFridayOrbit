@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { Worker } from 'node:worker_threads'
@@ -55,18 +56,19 @@ function looksBinary(buf: Buffer): boolean {
   return false
 }
 
-/** Read a text file for editing, flagging binary / too-large / missing cases. */
-export function readTextFile(file: string): ReadFileResult {
+/** Read a text file for editing, flagging binary / too-large / missing cases. Async so a
+ *  multi-MB read never stalls the main-process event loop (which also carries pty traffic). */
+export async function readTextFile(file: string): Promise<ReadFileResult> {
   let stat: fs.Stats
   try {
-    stat = fs.statSync(file)
+    stat = await fsp.stat(file)
   } catch {
     return { ok: false, missing: true }
   }
   if (stat.size > MAX_EDIT_BYTES) return { ok: false, tooLarge: true, size: stat.size }
   let buf: Buffer
   try {
-    buf = fs.readFileSync(file)
+    buf = await fsp.readFile(file)
   } catch (e) {
     return { ok: false, error: (e as Error).message }
   }
@@ -79,18 +81,23 @@ export function readTextFile(file: string): ReadFileResult {
  * Save only if the on-disk version still matches the caller's baseline hash (no one else
  * changed it), unless `force` is set. Never holds a lock; this is the single write point.
  */
-export function saveTextFile(file: string, content: string, baselineHash: string, force: boolean): SaveResult {
+export async function saveTextFile(
+  file: string,
+  content: string,
+  baselineHash: string,
+  force: boolean
+): Promise<SaveResult> {
   let currentHash: string | null = null
   try {
-    currentHash = hashContent(fs.readFileSync(file, 'utf8'))
+    currentHash = hashContent(await fsp.readFile(file, 'utf8'))
   } catch {
     currentHash = null // missing/unreadable
   }
   if (!force && currentHash !== baselineHash) return { ok: false, conflict: true }
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, content, 'utf8')
-    const stat = fs.statSync(file)
+    await fsp.mkdir(path.dirname(file), { recursive: true })
+    await fsp.writeFile(file, content, 'utf8')
+    const stat = await fsp.stat(file)
     return { ok: true, hash: hashContent(content), mtimeMs: stat.mtimeMs }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
@@ -113,8 +120,10 @@ export class FileWatcher {
     this.watcher = chokidar.watch(file, { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 120 } })
     const push = (): void => {
       if (this.target !== file) return
-      const r = readTextFile(file)
-      if (r.ok) this.onChange({ path: file, content: r.content, hash: r.hash, mtimeMs: r.mtimeMs })
+      void readTextFile(file).then((r) => {
+        if (this.target !== file) return // unwatched/retargeted while the read was in flight
+        if (r.ok) this.onChange({ path: file, content: r.content, hash: r.hash, mtimeMs: r.mtimeMs })
+      })
     }
     this.watcher.on('change', push)
     this.watcher.on('add', push)

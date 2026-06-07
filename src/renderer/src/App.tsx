@@ -353,6 +353,9 @@ export default function App(): JSX.Element {
   const [started, setStarted] = useState<Set<string>>(new Set())
   const [projMenu, setProjMenu] = useState<{ path: string; x: number; y: number } | null>(null)
   const [rightView, setRightView] = useState<'context' | 'files' | 'coord' | 'logs'>('context')
+  // AGENTS+ACTIVITY collapsed to a slim header bar — auto-derived from the tab (FILES needs the
+  // vertical space), manually toggleable until the next tab switch re-derives it
+  const [actCollapsed, setActCollapsed] = useState(false)
   const [openFiles, setOpenFiles] = useState<string[]>([])
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set())
@@ -424,6 +427,12 @@ export default function App(): JSX.Element {
   useEffect(() => {
     activeProjectRef.current = activeProject
   }, [activeProject])
+
+  // FILES is the one tab starved for vertical space — collapse AGENTS+ACTIVITY while it's open,
+  // restore the split on any other tab (manual toggles last until the next switch re-derives)
+  useEffect(() => {
+    setActCollapsed(rightView === 'files')
+  }, [rightView])
 
   // seed the side-column widths from config once it has loaded
   useEffect(() => {
@@ -1422,6 +1431,23 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject, activeTabId, tabs, sessions, resizeSplit])
 
+  // OS file drops are only meaningful on a terminal (which handles them itself, capturing the
+  // event). Anywhere else, swallow the drop — Electron's default would navigate the window to
+  // the dropped file's file:// URL, replacing the whole app.
+  useEffect(() => {
+    // (Event, not DragEvent — the React DragEvent type imported above shadows the DOM one)
+    const block = (e: Event): void => {
+      const dt = (e as { dataTransfer?: DataTransfer | null }).dataTransfer
+      if (dt?.types.includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', block)
+    window.addEventListener('drop', block)
+    return () => {
+      window.removeEventListener('dragover', block)
+      window.removeEventListener('drop', block)
+    }
+  }, [])
+
   // Dismiss the auto-focus highlight as soon as the user does anything (types, clicks, or
   // navigates) — that's the signal they've seen the jump and taken over the window.
   useEffect(() => {
@@ -1889,7 +1915,10 @@ export default function App(): JSX.Element {
 
         <aside className="col col-right" style={{ flex: `0 0 ${widths.right}px` }}>
           <SkillHud session={active} />
-          <div className="panel right-top" style={{ flex: `${splits.right[0]} 1 0%` }}>
+          <div
+            className="panel right-top"
+            style={{ flex: actCollapsed ? '1 1 auto' : `${splits.right[0]} 1 0%` }}
+          >
             <div className="panel-head rt-tabs">
               <button className={`rt ${rightView === 'context' ? 'on' : ''}`} onClick={() => setRightView('context')}>
                 CONTEXT
@@ -1960,11 +1989,29 @@ export default function App(): JSX.Element {
               {rightView === 'logs' && <LogPanel log={log} />}
             </div>
           </div>
-          <div className="row-resizer" onMouseDown={startSectResize('right', 0)} title="Drag to resize" />
-          <div className="panel activity-wrap" style={{ flex: `${splits.right[1]} 1 0%` }}>
-            <SubAgents items={active?.subagents ?? []} />
-            <Activity items={active?.activity ?? []} />
-          </div>
+          {!actCollapsed && (
+            <div className="row-resizer" onMouseDown={startSectResize('right', 0)} title="Drag to resize" />
+          )}
+          {actCollapsed ? (
+            <div className="panel activity-wrap collapsed">
+              <button
+                className="panel-head act-collapsed-head"
+                onClick={() => setActCollapsed(false)}
+                title="Expand activity"
+              >
+                <span>▸ ACTIVITY</span>
+                {(() => {
+                  const running = (active?.subagents ?? []).filter((s) => s.status === 'running').length
+                  return running > 0 ? <span className="panel-head-sub">{running} running</span> : null
+                })()}
+              </button>
+            </div>
+          ) : (
+            <div className="panel activity-wrap" style={{ flex: `${splits.right[1]} 1 0%` }}>
+              <SubAgents items={active?.subagents ?? []} />
+              <Activity items={active?.activity ?? []} onCollapse={() => setActCollapsed(true)} />
+            </div>
+          )}
         </aside>
           </>
         )}

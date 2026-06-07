@@ -461,8 +461,13 @@ function registerIpc(): void {
   // Read the OS clipboard for a paste. If it holds an image we persist it to a temp file
   // and return its path (claude reads image references by path); otherwise we return its
   // text. The terminal can't carry image bytes, so the path is what we type into the CLI.
-  ipcMain.handle(IPC.ClipboardRead, (): { text: string; imagePath: string | null } => {
-    const saveImage = (bytes: Buffer, ext = 'png'): string => {
+  // Huge text gets the same treatment when the caller allows it (claude sessions): pasting
+  // megabytes through the pty wedges the CLI, while a file path is read instantly.
+  const MAX_INLINE_PASTE = 100_000 // chars; beyond this a claude paste becomes a temp file
+  ipcMain.handle(
+    IPC.ClipboardRead,
+    (_e, allowTextFile?: boolean): { text: string; imagePath: string | null; textPath?: string | null } => {
+    const savePaste = (bytes: Buffer | string, ext = 'png'): string => {
       const dir = path.join(app.getPath('temp'), 'orbit-pastes')
       fs.mkdirSync(dir, { recursive: true })
       const clean = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
@@ -485,10 +490,18 @@ function registerIpc(): void {
 
     // 2) A raw bitmap on the clipboard (Win+Shift+S, PrintScreen, browser "copy image").
     const img = clipboard.readImage()
-    if (!img.isEmpty()) return { text: '', imagePath: saveImage(img.toPNG()) }
+    if (!img.isEmpty()) return { text: '', imagePath: savePaste(img.toPNG()) }
 
-    // 3) Plain text.
-    return { text: clipboard.readText() ?? '', imagePath: null }
+    // 3) Plain text — huge pastes become a temp file whose path is typed in instead.
+    const text = clipboard.readText() ?? ''
+    if (allowTextFile && text.length > MAX_INLINE_PASTE) {
+      try {
+        return { text: '', imagePath: null, textPath: savePaste(text, 'txt') }
+      } catch {
+        /* disk hiccup — fall back to inline paste */
+      }
+    }
+    return { text, imagePath: null }
   })
 
   ipcMain.handle(IPC.ClipboardWriteText, (_e, text: string) => {

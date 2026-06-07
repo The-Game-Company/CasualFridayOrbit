@@ -1152,6 +1152,16 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* OS file drag hovering this pane — its paths will be typed in on drop */
+.terminal-host.file-drop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 .terminal-xterm {
   /* own stacking context (z-index:0) so xterm's internal canvas layers (z-index up to 11)
      stay confined below the pin overlay, which is a positioned sibling */
@@ -3119,6 +3129,35 @@ body {
 }
 .activity-wrap .activity {
   flex: 1 1 auto;
+}
+/* collapsed to a slim header bar (auto while FILES is open — the tree needs the room) */
+.activity-wrap.collapsed {
+  flex: 0 0 auto;
+}
+.act-collapsed-head {
+  width: 100%;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.act-collapsed-head:hover {
+  color: var(--accent);
+  background: var(--bg-3);
+}
+/* the ▾ chevron in the expanded ACTIVITY head */
+.act-collapse-btn {
+  background: none;
+  border: none;
+  padding: 0 0 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-mute);
+  cursor: pointer;
+}
+.act-collapse-btn:hover {
+  color: var(--accent);
 }
 .subagents {
   flex: 0 0 auto;
