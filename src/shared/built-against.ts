@@ -2,4 +2,4 @@
 // Captured from the build machine's installed Claude Code so the app can show which version
 // it was built/tested against and warn before updating past it.
 export const BUILT_AGAINST_CLAUDE_VERSION: string | null = '2.1.168'
-export const BUILT_AGAINST_CAPTURED_AT = '2026-06-07T08:41:31.020Z'
+export const BUILT_AGAINST_CAPTURED_AT = '2026-06-07T13:15:37.547Z'

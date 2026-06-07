@@ -3120,6 +3120,35 @@ body {
 .activity-wrap .activity {
   flex: 1 1 auto;
 }
+/* collapsed to a slim header bar (auto while FILES is open — the tree needs the room) */
+.activity-wrap.collapsed {
+  flex: 0 0 auto;
+}
+.act-collapsed-head {
+  width: 100%;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.act-collapsed-head:hover {
+  color: var(--accent);
+  background: var(--bg-3);
+}
+/* the ▾ chevron in the expanded ACTIVITY head */
+.act-collapse-btn {
+  background: none;
+  border: none;
+  padding: 0 0 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-mute);
+  cursor: pointer;
+}
+.act-collapse-btn:hover {
+  color: var(--accent);
+}
 .subagents {
   flex: 0 0 auto;
   max-height: 38%;

@@ -100,7 +100,9 @@ export function EditorModal({
     noticeTimer.current = setTimeout(() => setNotice(null), 2500)
   }
 
-  const dirty = !!baseline && buffer !== baseline.content
+  // length check first — skips the O(n) string compare on most renders of big files
+  const dirty =
+    !!baseline && (buffer.length !== baseline.content.length || buffer !== baseline.content)
 
   // ── resolve final entry after we know binary state ─────────────────────────
   const entry = useMemo(() => resolveFileType(path, binary), [path, binary])
@@ -183,6 +185,9 @@ export function EditorModal({
     return window.orbit.onFileExternalChange((c) => {
       if (c.path !== path) return
       if (c.deleted) { setDeleted(true); flash('file was deleted on disk'); return }
+      // our own save echoing back through the watcher — the baseline already matches, so
+      // skip the full-content state churn (and the spurious conflict race while typing)
+      if (c.hash === baselineRef.current?.hash) return
       const isDirty = baselineRef.current ? bufferRef.current !== baselineRef.current.content : false
       if (!isDirty) {
         setBuffer(c.content!)

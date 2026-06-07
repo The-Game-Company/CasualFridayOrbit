@@ -74,8 +74,10 @@ const api = {
     force: boolean
   ): Promise<SaveResult> =>
     ipcRenderer.invoke(IPC.SaveTextFile, { path, content, baselineHash, force }),
-  clipboardRead: (): Promise<{ text: string; imagePath: string | null }> =>
-    ipcRenderer.invoke(IPC.ClipboardRead),
+  clipboardRead: (
+    allowTextFile?: boolean
+  ): Promise<{ text: string; imagePath: string | null; textPath?: string | null }> =>
+    ipcRenderer.invoke(IPC.ClipboardRead, allowTextFile),
   clipboardWriteText: (text: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.ClipboardWriteText, text),
   watchFile: (path: string): void => ipcRenderer.send(IPC.WatchFile, path),

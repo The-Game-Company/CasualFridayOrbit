@@ -215,8 +215,12 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
         (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'v') || (e.shiftKey && e.key === 'Insert')
       if (isPaste) {
         e.preventDefault()
-        window.orbit.clipboardRead().then(({ text, imagePath }) => {
-          if (imagePath) window.orbit.sessionInput(props.sessionId, ` ${imagePath} `)
+        // claude sessions get the huge-text fallback: past ~100KB the clipboard is saved to a
+        // temp file and the path is typed in (like images) — megabytes through bracketed
+        // paste wedge the CLI. Plain shells always get the real text.
+        window.orbit.clipboardRead(props.kind === 'claude').then(({ text, imagePath, textPath }) => {
+          const filePath = imagePath ?? textPath
+          if (filePath) window.orbit.sessionInput(props.sessionId, ` ${filePath} `)
           else if (text) term.paste(text)
         })
         return false

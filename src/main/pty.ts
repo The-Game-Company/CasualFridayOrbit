@@ -107,8 +107,16 @@ export interface PtyOptions {
  * ANTHROPIC_API_KEY — claude uses the user's existing subscription login.
  */
 export class PtySession {
+  // ConPTY's input pipe (and a CLI busy mid-render) can't take a huge write in one call —
+  // a multi-megabyte paste used to wedge the pipe and the session with it. Anything past
+  // one chunk goes through a paced queue so the pty and the event loop keep breathing.
+  private static readonly WRITE_CHUNK = 4096
+  private static readonly WRITE_INTERVAL_MS = 5
+
   private term: pty.IPty | null = null
   private injected: InjectedSession | null = null
+  private writeQueue: string[] = []
+  private writeTimer: NodeJS.Timeout | null = null
 
   start(opts: PtyOptions): void {
     this.dispose()
@@ -172,7 +180,44 @@ export class PtySession {
   }
 
   write(data: string): void {
-    this.term?.write(data)
+    if (!this.term) return
+    // fast path: small writes (keystrokes) skip the queue entirely when nothing is pending
+    if (this.writeQueue.length === 0 && data.length <= PtySession.WRITE_CHUNK) {
+      this.term.write(data)
+      return
+    }
+    for (let i = 0; i < data.length; ) {
+      let end = Math.min(i + PtySession.WRITE_CHUNK, data.length)
+      // never split a surrogate pair across chunks — each half would mangle to U+FFFD
+      if (end < data.length) {
+        const c = data.charCodeAt(end - 1)
+        if (c >= 0xd800 && c <= 0xdbff) end--
+      }
+      this.writeQueue.push(data.slice(i, end))
+      i = end
+    }
+    this.drainWrites()
+  }
+
+  private drainWrites(): void {
+    if (this.writeTimer) return
+    const tick = (): void => {
+      this.writeTimer = null
+      if (!this.term) {
+        this.writeQueue = []
+        return
+      }
+      const chunk = this.writeQueue.shift()
+      if (chunk === undefined) return
+      try {
+        this.term.write(chunk)
+      } catch {
+        this.writeQueue = [] // terminal died mid-drain
+        return
+      }
+      if (this.writeQueue.length > 0) this.writeTimer = setTimeout(tick, PtySession.WRITE_INTERVAL_MS)
+    }
+    this.writeTimer = setTimeout(tick, 0)
   }
 
   resize(cols: number, rows: number): void {
@@ -185,6 +230,11 @@ export class PtySession {
   }
 
   dispose(): void {
+    if (this.writeTimer) {
+      clearTimeout(this.writeTimer)
+      this.writeTimer = null
+    }
+    this.writeQueue = []
     if (this.term) {
       try {
         this.term.kill()

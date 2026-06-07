@@ -13,7 +13,13 @@ const STORE_KEY = 'orbit.activityMode'
  *  per-tool chatter (Bash/Read/Edit/Grep, notifications) that Full mode still shows. */
 const BASIC_KINDS = new Set<ActivityKind>(['prompt', 'skill', 'mcp', 'agent', 'stop'])
 
-export function Activity({ items }: { items: ActivityItem[] }): JSX.Element {
+export function Activity({
+  items,
+  onCollapse
+}: {
+  items: ActivityItem[]
+  onCollapse?: () => void
+}): JSX.Element {
   const [mode, setMode] = useState<Mode>(
     () => (localStorage.getItem(STORE_KEY) as Mode) || 'basic'
   )
@@ -36,6 +42,11 @@ export function Activity({ items }: { items: ActivityItem[] }): JSX.Element {
             Full
           </button>
         </span>
+        {onCollapse && (
+          <button className="act-collapse-btn" onClick={onCollapse} title="Collapse">
+            ▾
+          </button>
+        )}
       </div>
       <div className="activity-list">
         {shown.length === 0 && (
