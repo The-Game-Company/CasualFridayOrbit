@@ -1234,6 +1234,7 @@ export default function App(): JSX.Element {
   //   • Ctrl+\           split the active tab with a new Claude window
   //   • Ctrl+W           close the active window (and its tab if it was the last window)
   //   • Ctrl+Shift+W     reopen the most recently closed window where it was (undo-close)
+  //   • Ctrl+(Shift+)Tab next/previous tab of the active project (cycles)
   //   • Ctrl+1..9        focus the Nth tab of the active project (by position)
   //   • Ctrl+Shift+↑/↓   move to the previous/next project (and focus/open it)
   useEffect(() => {
@@ -1275,6 +1276,17 @@ export default function App(): JSX.Element {
       if (e.shiftKey && e.key.toLowerCase() === 'w') {
         grab()
         reopenClosed()
+        return
+      }
+
+      // Ctrl+Tab / Ctrl+Shift+Tab → next/previous tab of the active project (cycles)
+      if (e.key === 'Tab') {
+        const projTabs = tabs.filter((t) => t.projectPath === activeProject)
+        if (projTabs.length < 2) return
+        grab()
+        const cur = projTabs.findIndex((t) => t.id === activeTabId)
+        const step = e.shiftKey ? -1 : 1
+        focusTab(projTabs[(Math.max(cur, 0) + step + projTabs.length) % projTabs.length].id)
         return
       }
 

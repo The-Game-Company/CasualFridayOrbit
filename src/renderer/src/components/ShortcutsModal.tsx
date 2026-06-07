@@ -12,6 +12,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
       [['Ctrl', '\\'], 'Split — new Claude window in the active tab'],
       [['Ctrl', 'W'], 'Close the active window (and its tab if it was the last window)'],
       [['Ctrl', 'Shift', 'W'], 'Reopen the last closed window where it was (undo-close)'],
+      [['Ctrl', 'Tab'], 'Next tab of the active project (Shift reverses)'],
       [['Ctrl', '1…9'], 'Jump to the Nth tab of the active project'],
       [['Alt', '←/→'], 'Move between split windows, then between tabs'],
       [['Alt', '↑/↓'], 'Move between stacked split windows'],
