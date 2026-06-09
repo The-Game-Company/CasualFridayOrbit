@@ -316,6 +316,8 @@ export interface PersistedSession {
   resumeId?: string
   /** most recent user prompt, so the pinned-prompt bar can show it after a restore */
   lastPrompt?: string
+  /** recently touched files (most recent first), so the recents panel survives a restart */
+  recentFiles?: string[]
 }
 
 /**

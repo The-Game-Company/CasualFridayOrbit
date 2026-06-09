@@ -355,6 +355,7 @@ export default function App(): JSX.Element {
   // sessions whose backend has been spawned (lazy-resume: only those that became visible)
   const [started, setStarted] = useState<Set<string>>(new Set())
   const [projMenu, setProjMenu] = useState<{ path: string; x: number; y: number } | null>(null)
+  const [fileTabMenu, setFileTabMenu] = useState<{ path: string; x: number; y: number } | null>(null)
   const [rightView, setRightView] = useState<'context' | 'files' | 'coord' | 'logs'>('context')
   // AGENTS+ACTIVITY collapsed to a slim header bar — auto-derived from the tab (FILES needs the
   // vertical space), manually toggleable until the next tab switch re-derives it
@@ -679,7 +680,8 @@ export default function App(): JSX.Element {
           setSessions(
             keep.map((p) => ({
               ...initSession(p.id, p.projectPath, p.projectName, p.kind, p.title, p.resumeId),
-              lastPrompt: p.lastPrompt ?? ''
+              lastPrompt: p.lastPrompt ?? '',
+              recentFiles: p.recentFiles ?? []
             }))
           )
 
@@ -781,7 +783,8 @@ export default function App(): JSX.Element {
         kind: s.kind,
         title: s.title,
         resumeId: s.resumeId,
-        lastPrompt: s.lastPrompt ? s.lastPrompt.slice(0, 500) : undefined
+        lastPrompt: s.lastPrompt ? s.lastPrompt.slice(0, 500) : undefined,
+        recentFiles: s.recentFiles.length ? s.recentFiles : undefined
       })),
       tabs: tabs.map((t) => ({
         id: t.id,
@@ -1888,6 +1891,7 @@ export default function App(): JSX.Element {
                     key={p}
                     className={`editor-tab${p === activeFilePath ? ' active' : ''}${dirtyFiles.has(p) ? ' dirty' : ''}`}
                     onClick={() => setActiveFilePath(p)}
+                    onContextMenu={(e) => { e.preventDefault(); setFileTabMenu({ path: p, x: e.clientX, y: e.clientY }) }}
                   >
                     {dirtyFiles.has(p) && <span className="tab-dot">*</span>}
                     {p.split(/[\\/]/).pop() || p}
@@ -2146,6 +2150,33 @@ export default function App(): JSX.Element {
                 </div>
               </>
             )}
+          </div>
+        </>
+      )}
+
+      {fileTabMenu && (
+        <>
+          <div className="menu-backdrop" onClick={() => setFileTabMenu(null)} />
+          <div className="context-menu" style={{ left: fileTabMenu.x, top: fileTabMenu.y }}>
+            <div
+              className="dropdown-item"
+              onClick={() => {
+                void window.orbit.openInExplorer(fileTabMenu.path)
+                setFileTabMenu(null)
+              }}
+            >
+              {window.orbit.platform === 'darwin' ? '🔍 Reveal in Finder' : '📂 Open in Explorer'}
+            </div>
+            <div className="dropdown-separator" />
+            <div
+              className="dropdown-item danger"
+              onClick={() => {
+                handleTabClose(fileTabMenu.path)
+                setFileTabMenu(null)
+              }}
+            >
+              Close tab
+            </div>
           </div>
         </>
       )}
