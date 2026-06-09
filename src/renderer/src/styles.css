@@ -13,6 +13,8 @@
   --fg-dim: #8b93a7;
   --fg-mute: #5b6273;
   --accent: #7aa2f7;
+  /* legible text on an accent-colored fill; applyTheme() overrides per theme */
+  --accent-fg: #ffffff;
   --skill: #bb9af7;
   --green: #9ece6a;
   --amber: #e0af68;
@@ -3388,9 +3390,12 @@ body {
 /* strip the tooltip's default panel chrome so just the pill shows (!important
    beats both editor themes and CodeMirror's base tooltip rule) */
 .cm-tooltip:has(.cm-add-to-chat) {
-  background: transparent !important;
-  border: none !important;
+  background: none !important;
+  background-color: transparent !important;
+  border: 0 !important;
   box-shadow: none !important;
+  padding: 0 !important;
+  outline: none !important;
 }
 .cm-add-to-chat-btn {
   display: inline-flex;
@@ -3400,9 +3405,9 @@ body {
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
-  color: #fff;
+  color: var(--accent-fg, #fff);
   background: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 65%, #000);
+  border: none;
   border-radius: 6px;
   padding: 5px 9px;
   cursor: pointer;

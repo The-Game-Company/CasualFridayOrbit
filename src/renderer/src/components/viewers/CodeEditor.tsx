@@ -134,7 +134,7 @@ const editorTheme = EditorView.theme({
   '.cm-diagnostic': { padding: '4px 8px' },
   '.cm-diagnostic-error': { borderLeft: '3px solid var(--red)' },
   '.cm-diagnostic-warning': { borderLeft: '3px solid var(--amber)' },
-})
+}, { dark: true })
 
 export function CodeEditor({
   path,

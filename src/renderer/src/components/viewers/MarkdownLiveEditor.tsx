@@ -323,7 +323,7 @@ const mdTheme = EditorView.theme({
     borderBottom: '1px solid var(--line)',
     verticalAlign: 'middle',
   },
-})
+}, { dark: true })
 
 export function MarkdownLiveEditor({
   path,

@@ -46,17 +46,25 @@ function build(
         dom.appendChild(btn)
         return {
           dom,
-          // Strip the tooltip wrapper's default panel chrome (white box) — set inline
-          // with !important so it wins regardless of theme order or :has() support.
+          // Strip the tooltip wrapper's default panel chrome (the white box from
+          // CodeMirror's base theme) — inline !important on the wrapper element(s),
+          // which beats any stylesheet and doesn't depend on :has() support. rAF
+          // retry covers the case where the wrapper is restyled just after mount.
           mount: () => {
-            let el: HTMLElement | null = dom.parentElement
-            while (el && !el.classList.contains('cm-tooltip')) el = el.parentElement
-            if (el) {
-              el.style.setProperty('background', 'transparent', 'important')
-              el.style.setProperty('border', 'none', 'important')
-              el.style.setProperty('box-shadow', 'none', 'important')
-              el.style.setProperty('padding', '0', 'important')
+            const strip = (): void => {
+              let el: HTMLElement | null = dom.parentElement
+              for (let i = 0; el && i < 5; i++, el = el.parentElement) {
+                if (i > 0 && !/tooltip/.test(el.className)) continue
+                el.style.setProperty('background', 'none', 'important')
+                el.style.setProperty('background-color', 'transparent', 'important')
+                el.style.setProperty('border', '0', 'important')
+                el.style.setProperty('box-shadow', 'none', 'important')
+                el.style.setProperty('padding', '0', 'important')
+                el.style.setProperty('outline', 'none', 'important')
+              }
             }
+            strip()
+            requestAnimationFrame(strip)
           },
         }
       },

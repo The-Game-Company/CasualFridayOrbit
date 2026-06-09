@@ -16,7 +16,7 @@ import type {
   WorkspaceState
 } from '../../shared/events'
 import { applyEvent, initSession, tabWindows, type SessionState, type Tab } from './session-model'
-import { applyTheme, THEMES } from './themes'
+import { applyTheme, readableOn, THEMES } from './themes'
 import { Terminal, type TermHandle } from './components/Terminal'
 import { TabBar } from './components/TabBar'
 import { Pane } from './components/Pane'
@@ -846,8 +846,13 @@ export default function App(): JSX.Element {
   // color-code the UI with the active project's declared accent (revert to theme if none)
   useEffect(() => {
     const root = document.documentElement
-    if (projectInfo.accent) root.style.setProperty('--accent', projectInfo.accent)
-    else root.style.removeProperty('--accent')
+    if (projectInfo.accent) {
+      root.style.setProperty('--accent', projectInfo.accent)
+      root.style.setProperty('--accent-fg', readableOn(projectInfo.accent))
+    } else {
+      root.style.removeProperty('--accent')
+      root.style.removeProperty('--accent-fg')
+    }
   }, [projectInfo.accent])
 
   // re-target coordination/log watchers when their settings change (apply live)
@@ -872,9 +877,12 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!config) return
     applyTheme(config.theme)
-    // applyTheme rewrites every token (incl. --accent); restore the active
-    // project's accent override on top so a theme switch doesn't drop it
-    if (projectInfo.accent) document.documentElement.style.setProperty('--accent', projectInfo.accent)
+    // applyTheme rewrites every token (incl. --accent/--accent-fg); restore the
+    // active project's accent override on top so a theme switch doesn't drop it
+    if (projectInfo.accent) {
+      document.documentElement.style.setProperty('--accent', projectInfo.accent)
+      document.documentElement.style.setProperty('--accent-fg', readableOn(projectInfo.accent))
+    }
   }, [config?.theme, projectInfo.accent])
 
   // UI scaling: uiScale zooms the whole window (panels, text, icons, terminals alike);
