@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { startPathDrag } from './drag'
 import type { FileNode, KeyDoc } from '../../../shared/events'
 
 function ext(name: string): string {
@@ -79,6 +80,8 @@ function Node({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile }: N
     <div
       className={`ctx-row file ${isBusy ? 'busy' : ''} ${isRecent ? 'recent' : ''} ${isGitChanged ? 'git-changed' : ''}`}
       style={pad}
+      draggable
+      onDragStart={(e) => startPathDrag(e, node.path)}
       onClick={() => onOpenFile(node.path)}
       title={leased ? `${node.path} — leased by another agent` : node.path}
     >
@@ -161,6 +164,8 @@ function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFil
     <div
       className={`ctx-row file ${isBusy ? 'busy' : ''} ${isRecent ? 'recent' : ''} ${isGitChanged ? 'git-changed' : ''}`}
       style={pad}
+      draggable
+      onDragStart={(e) => startPathDrag(e, node.path)}
       onClick={() => onOpenFile(node.path)}
       title={leased ? `${node.path} — leased by another agent` : node.path}
     >
@@ -229,6 +234,8 @@ function RecentsPanel({ items, root, busy, isLeased, getBusyAgent, getLeasedBy, 
           <div
             key={path}
             className={`ft-recent-item${inProgress ? ' in-progress' : ''}`}
+            draggable
+            onDragStart={(e) => startPathDrag(e, path)}
             onClick={() => onOpenFile(path)}
             title={path}
           >
