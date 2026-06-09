@@ -45,6 +45,7 @@ const api = {
   setUiZoom: (factor: number): void => webFrame.setZoomFactor(factor),
   setConfig: (cfg: AppConfig): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigSet, cfg),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.PickFolder),
+  openInExplorer: (path: string): Promise<void> => ipcRenderer.invoke(IPC.OpenInExplorer, path),
   readContextFile: (path: string): Promise<string> => ipcRenderer.invoke(IPC.ContextRead, path),
   listHistory: (projectPath: string): Promise<HistoryEntry[]> =>
     ipcRenderer.invoke(IPC.HistoryList, projectPath),
@@ -84,7 +85,7 @@ const api = {
   clipboardWriteText: (text: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.ClipboardWriteText, text),
   watchFile: (path: string): void => ipcRenderer.send(IPC.WatchFile, path),
-  unwatchFile: (): void => ipcRenderer.send(IPC.UnwatchFile),
+  unwatchFile: (path: string): void => ipcRenderer.send(IPC.UnwatchFile, path),
   onFileExternalChange: (cb: (c: ExternalChange) => void): (() => void) => {
     const fn = (_e: unknown, c: ExternalChange): void => cb(c)
     ipcRenderer.on(IPC.FileExternalChange, fn)

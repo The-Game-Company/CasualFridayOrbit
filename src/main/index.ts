@@ -133,29 +133,53 @@ const projectName = (cwd: unknown): string =>
 // Effort is keyed per-session (not per-cwd) so that changing effort in one project window
 // doesn't corrupt other windows that fall through to the same global settings file.
 const effortCache = new Map<string, { effort: string | null; at: number }>()
-// Once a session has established its effort, remember it so subsequent events from OTHER
-// sessions changing global settings don't overwrite this session's display. '' = pinned
-// "unknown": resolved once, found nothing — also must not drift to later global edits.
+// Last effort we settled on for a session. '' is a real entry meaning "resolved once, found
+// nothing" — distinct from `undefined` ("never resolved"), so a later global edit can't
+// silently relabel a session we already decided was unknown.
 const sessionEffort = new Map<string, string>()
+
+// Canonical effort ladder. We normalize whatever claude/settings hand us to one of these so
+// the badge's CSS class and color are always valid; common spellings collapse to a canon.
+const EFFORT_ALIASES: Record<string, string> = {
+  l: 'low', lo: 'low', low: 'low',
+  m: 'medium', med: 'medium', medium: 'medium',
+  h: 'high', high: 'high',
+  xhigh: 'xhigh', 'x-high': 'xhigh', 'extra-high': 'xhigh', extrahigh: 'xhigh', 'xtra-high': 'xhigh',
+  max: 'max', maximum: 'max', maximal: 'max',
+}
+/** Trim/lowercase and map to the canonical ladder; unknown non-empty values pass through
+ *  lowercased (future levels still render, just without a dedicated color). Empty → null. */
+function normEffort(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = v.trim().toLowerCase()
+  if (!s) return null
+  return EFFORT_ALIASES[s] ?? s
+}
+
 function readEffortLevel(file: string): string | null {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'))
-    return typeof j?.effortLevel === 'string' && j.effortLevel ? j.effortLevel : null
+    return normEffort(j?.effortLevel)
   } catch {
     return null
   }
 }
-function resolveEffort(sessionId: string, cwd: unknown): string | null {
-  if (typeof cwd !== 'string' || !cwd) return null
 
-  // Check if settings files have a project-local effort override for this cwd.
-  // Only look at project-local files — NOT the global settings — to avoid cross-session
-  // contamination when a different window changes the global effortLevel.
-  const projectCandidates = [
+/**
+ * Resolve a session's reasoning effort from the settings files, claude's own precedence:
+ * project-local → project-shared → user-global. The settings are re-read every event (so a
+ * mid-session `/effort` is picked up), but a change to the *global* default only relabels the
+ * session the user is actively driving — otherwise `/effort` in one window would wrongly
+ * relabel every other window that falls through to the same global file. Project-local
+ * overrides are cwd-specific and unambiguous, so they're always trusted live.
+ */
+function resolveEffort(sessionId: string, cwd: unknown, isActive: boolean): string | null {
+  if (typeof cwd !== 'string' || !cwd) return sessionEffort.get(sessionId) || null
+
+  for (const f of [
     path.join(cwd, '.claude', 'settings.local.json'),
     path.join(cwd, '.claude', 'settings.json'),
-  ]
-  for (const f of projectCandidates) {
+  ]) {
     const e = readEffortLevel(f)
     if (e) {
       sessionEffort.set(sessionId, e)
@@ -163,23 +187,28 @@ function resolveEffort(sessionId: string, cwd: unknown): string | null {
     }
   }
 
-  // No project-local setting. If this session already resolved once (even to "unknown"),
-  // keep that — don't re-read the global file, which would pick up another window's change.
-  const known = sessionEffort.get(sessionId)
-  if (known !== undefined) return known || null
-
-  // First event for this session with no project-local setting: read global as the
-  // initial value, then pin it to the session so it won't drift.
+  // Global default — shared across windows, so read it (briefly cached) but gate adoption.
   const cached = effortCache.get(cwd)
-  const globalEffort = cached && Date.now() - cached.at < 1500
-    ? cached.effort
-    : (() => {
-        const e = readEffortLevel(path.join(app.getPath('home'), '.claude', 'settings.json'))
-        effortCache.set(cwd, { effort: e, at: Date.now() })
-        return e
-      })()
-  sessionEffort.set(sessionId, globalEffort ?? '')
-  return globalEffort
+  const globalEffort =
+    cached && Date.now() - cached.at < 1500
+      ? cached.effort
+      : (() => {
+          const e = readEffortLevel(path.join(app.getPath('home'), '.claude', 'settings.json'))
+          effortCache.set(cwd, { effort: e, at: Date.now() })
+          return e
+        })()
+
+  const known = sessionEffort.get(sessionId)
+  // A background session keeps whatever it last showed — don't let another window's /effort
+  // (which rewrote the shared global file) bleed into it.
+  if (known !== undefined && !isActive) return known || null
+  if (globalEffort) {
+    sessionEffort.set(sessionId, globalEffort)
+    return globalEffort
+  }
+  if (known !== undefined) return known || null
+  sessionEffort.set(sessionId, '') // resolved once, nothing found — pin "unknown"
+  return null
 }
 
 const clip = (s: unknown, n = 80): string => {
@@ -194,13 +223,15 @@ const lastPrompt = new Map<string, { project: string; prompt: string; ts: number
 function onHookEvent(evt: HookEvent): void {
   const d = evt.data ?? {}
   // Stamp the live effort. CLAUDE_EFFORT from the hook env is authoritative when present —
-  // it's per-session and tracks mid-session /effort changes — so pin and prefer it; only
-  // fall back to the settings-file guess (pinned per session) when claude didn't export it.
-  if (evt.effort) {
-    sessionEffort.set(evt.sessionId, evt.effort)
+  // it's per-session and tracks mid-session /effort changes — so prefer it; otherwise (Orbit
+  // usually launches claude without it in the env) fall back to the settings files.
+  const envEffort = normEffort(evt.effort)
+  if (envEffort) {
+    sessionEffort.set(evt.sessionId, envEffort)
+    evt.effort = envEffort
   } else {
-    const effort = resolveEffort(evt.sessionId, d.cwd)
-    if (effort) evt.effort = effort
+    const effort = resolveEffort(evt.sessionId, d.cwd, evt.sessionId === activeSessionId)
+    evt.effort = effort ?? undefined
   }
   send(IPC.HookEvent, evt)
   const project = projectName(d.cwd)
@@ -424,6 +455,10 @@ function registerIpc(): void {
     return saved
   })
 
+  ipcMain.handle(IPC.OpenInExplorer, (_e, folderPath: string) => {
+    shell.showItemInFolder(folderPath)
+  })
+
   ipcMain.handle(IPC.PickFolder, async () => {
     const res = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
     return res.canceled ? null : res.filePaths[0]
@@ -510,7 +545,7 @@ function registerIpc(): void {
   })
 
   ipcMain.on(IPC.WatchFile, (_e, file: string) => fileWatcher?.watch(file))
-  ipcMain.on(IPC.UnwatchFile, () => fileWatcher?.unwatch())
+  ipcMain.on(IPC.UnwatchFile, (_e, file: string) => fileWatcher?.unwatch(file))
 
   ipcMain.on(IPC.CoordWatch, (_e, projectPath: string) => coordWatcher?.watch(projectPath))
   ipcMain.handle(IPC.KeyDocs, (_e, projectPath: string) => listKeyDocs(projectPath))
@@ -604,7 +639,7 @@ app.whenReady().then(async () => {
 
 function shutdown(): void {
   sessions?.disposeAll()
-  fileWatcher?.unwatch()
+  fileWatcher?.unwatchAll()
   coordWatcher?.unwatch()
   logWatcher?.unwatch()
   projectsWatcher?.dispose()

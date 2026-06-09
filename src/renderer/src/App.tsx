@@ -135,6 +135,9 @@ function columnLayout(columns: string[][]): { cols: number; rows: number; cellOf
 const RESIZE_STEP = 0.05
 const MIN_COL_WEIGHT = 0.15
 
+/** Pixels each Ctrl+Shift+←/→ press grows/shrinks the file-viewer dock (when it has focus). */
+const EDITOR_RESIZE_STEP = 60
+
 /**
  * The grid's `gridTemplateColumns`. With explicit per-column weights it renders them as `fr`
  * units (kept as `minmax(0, Xfr)` so panes can still shrink below their content); without them
@@ -398,6 +401,7 @@ export default function App(): JSX.Element {
   const widthsRef = useRef(widths)
   widthsRef.current = widths
   const editorWidthRef = useRef(520)
+  const editorWidthSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const splitsRef = useRef(splits)
   splitsRef.current = splits
   const configRef = useRef<AppConfig | null>(config)
@@ -511,6 +515,21 @@ export default function App(): JSX.Element {
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }
+
+  // Keyboard resize of the editor dock (Ctrl/Alt+Shift+←/→ when the viewer has focus). The dock is
+  // right-anchored with its drag handle on the left edge, so — matching the mouse drag — ArrowLeft
+  // grows it and ArrowRight shrinks it. The config write is debounced so key-repeat doesn't spam disk.
+  const resizeEditor = useCallback((dir: 'L' | 'R'): void => {
+    const clamp = (n: number): number => Math.max(320, Math.min(1400, n))
+    const next = clamp(editorWidthRef.current + (dir === 'L' ? EDITOR_RESIZE_STEP : -EDITOR_RESIZE_STEP))
+    editorWidthRef.current = next
+    setEditorWidth(next)
+    if (editorWidthSaveTimer.current) clearTimeout(editorWidthSaveTimer.current)
+    editorWidthSaveTimer.current = setTimeout(() => {
+      const cfg = configRef.current
+      if (cfg) window.orbit.setConfig({ ...cfg, editorWidth: editorWidthRef.current })
+    }, 400)
+  }, [])
 
   const openFile = (path: string): void => {
     setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
@@ -643,7 +662,16 @@ export default function App(): JSX.Element {
       window.orbit
         .loadWorkspace()
         .then((ws) => {
-          if (!ws || !ws.sessions.length) return
+          if (!ws) return
+          // Restore the open file-viewer tabs (order + active) independently of sessions, so
+          // files come back even when there were no terminals open. The per-project switch
+          // effect re-derives openFiles from this map when openFilesPerProject is on.
+          if (ws.editorsByProject) openFilesByProject.current = ws.editorsByProject
+          if (ws.openEditors?.length) {
+            setOpenFiles(ws.openEditors)
+            setActiveFilePath(ws.activeEditor ?? ws.openEditors[0])
+          }
+          if (!ws.sessions.length) return
           const exclude = new Set(cfg.restoreExclude ?? [])
           const keep = ws.sessions.filter((p) => !exclude.has(p.projectPath))
           if (!keep.length) return
@@ -763,14 +791,17 @@ export default function App(): JSX.Element {
         activeWindow: t.activeWindow
       })),
       activeProject,
-      activeTabId
+      activeTabId,
+      openEditors: openFiles,
+      activeEditor: activeFilePath,
+      editorsByProject: openFilesByProject.current
     }
     const str = JSON.stringify(snapshot)
     if (str === lastSaved.current) return
     lastSaved.current = str
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => window.orbit.saveWorkspace(snapshot), 400)
-  }, [sessions, tabs, activeProject, activeTabId, restored, config?.restoreOnLaunch, upgrading])
+  }, [sessions, tabs, activeProject, activeTabId, openFiles, activeFilePath, restored, config?.restoreOnLaunch, upgrading])
 
   useEffect(() => {
     window.orbit.listSkills(activeProject).then(setSkills)
@@ -1094,7 +1125,24 @@ export default function App(): JSX.Element {
       const sameProj = rest.filter((t) => t.projectPath === tab.projectPath)
       const next = sameProj[sameProj.length - 1] ?? rest[rest.length - 1] ?? null
       setActiveTabId(next?.id ?? null)
-      if (next) setActiveProject(next.projectPath)
+      setActiveProject(next?.projectPath ?? null)
+    }
+  }
+
+  /** Close all tabs and sessions belonging to a project. */
+  function closeProject(projectPath: string): void {
+    const projTabs = tabs.filter((t) => t.projectPath === projectPath)
+    projTabs.forEach((tab) => {
+      tabWindows(tab).forEach((w) => snapshotClosed(w))
+    })
+    const winSet = new Set(projTabs.flatMap((t) => tabWindows(t)))
+    setSessions((prev) => prev.filter((s) => !winSet.has(s.id)))
+    const rest = tabs.filter((t) => t.projectPath !== projectPath)
+    setTabs(rest)
+    if (activeProject === projectPath) {
+      const next = rest[rest.length - 1] ?? null
+      setActiveTabId(next?.id ?? null)
+      setActiveProject(next?.projectPath ?? null)
     }
   }
 
@@ -1302,6 +1350,12 @@ export default function App(): JSX.Element {
       // We pick the divider on the RIGHT edge of the active column when one exists, else its LEFT
       // edge (active column is the rightmost). ArrowLeft moves that divider left, ArrowRight right.
       if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        // Focus inside the file viewer → resize the editor dock width instead of the columns.
+        if (openFilesRef.current.length && document.activeElement?.closest?.('.editor-dock')) {
+          grab()
+          resizeEditor(e.key === 'ArrowLeft' ? 'L' : 'R')
+          return
+        }
         // No-op (don't swallow the key) with fewer than 2 columns — resizeSplit returns false.
         if (resizeSplit(e.key === 'ArrowLeft' ? 'L' : 'R')) grab()
         return
@@ -1337,6 +1391,13 @@ export default function App(): JSX.Element {
       // the key when the resize actually happened (resizeSplit returns false with <2 columns).
       if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         if (document.querySelector('.modal-overlay')) return
+        // Focus inside the file viewer → resize the editor dock width instead of the columns.
+        if (openFilesRef.current.length && document.activeElement?.closest?.('.editor-dock')) {
+          e.preventDefault()
+          e.stopPropagation()
+          resizeEditor(e.key === 'ArrowLeft' ? 'L' : 'R')
+          return
+        }
         if (resizeSplit(e.key === 'ArrowLeft' ? 'L' : 'R')) {
           e.preventDefault()
           e.stopPropagation()
@@ -2038,6 +2099,16 @@ export default function App(): JSX.Element {
             <div
               className="dropdown-item"
               onClick={() => {
+                void window.orbit.openInExplorer(projMenu.path)
+                setProjMenu(null)
+              }}
+            >
+              {window.orbit.platform === 'darwin' ? '🔍 Reveal in Finder' : '📂 Open in Explorer'}
+            </div>
+            <div className="dropdown-separator" />
+            <div
+              className="dropdown-item"
+              onClick={() => {
                 toggleExclude(projMenu.path)
                 setProjMenu(null)
               }}
@@ -2061,6 +2132,20 @@ export default function App(): JSX.Element {
                 </>
               )}
             </div>
+            {tabs.some((t) => t.projectPath === projMenu.path) && (
+              <>
+                <div className="dropdown-separator" />
+                <div
+                  className="dropdown-item danger"
+                  onClick={() => {
+                    closeProject(projMenu.path)
+                    setProjMenu(null)
+                  }}
+                >
+                  Close project
+                </div>
+              </>
+            )}
           </div>
         </>
       )}

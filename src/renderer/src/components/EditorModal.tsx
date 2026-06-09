@@ -81,6 +81,36 @@ export function EditorModal({
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [showMerge, setShowMerge] = useState(false)
 
+  // Ctrl + mouse-wheel magnifies the preview/editor text. The factor rides on a CSS var
+  // (--preview-zoom) set on the editor root, so every viewer (markdown, code, etc.) scales
+  // off it. Persisted globally so the chosen size sticks across files and sessions.
+  const ZOOM_MIN = 0.5
+  const ZOOM_MAX = 4
+  const [zoom, setZoom] = useState(() => {
+    const v = Number(localStorage.getItem('orbit.previewZoom'))
+    return v >= ZOOM_MIN && v <= ZOOM_MAX ? v : 1
+  })
+  useEffect(() => {
+    localStorage.setItem('orbit.previewZoom', String(zoom))
+  }, [zoom])
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    // Native listener (passive: false) — React's onWheel is passive and can't preventDefault,
+    // which we need to stop the browser's own Ctrl+wheel page zoom.
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom((z) => {
+        const next = z * (e.deltaY < 0 ? 1.1 : 1 / 1.1)
+        return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 100) / 100))
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   const bufferRef = useRef('')
   const baselineRef = useRef<Baseline | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -176,7 +206,7 @@ export function EditorModal({
     })
     return () => {
       alive = false
-      window.orbit.unwatchFile()
+      window.orbit.unwatchFile(path)
     }
   }, [path, skipTextRead])
 
@@ -251,7 +281,7 @@ export function EditorModal({
   const Viewer = entry.Viewer
 
   return (
-    <div className="editor">
+    <div className="editor" style={{ '--preview-zoom': zoom } as React.CSSProperties}>
       {(showModes && load === 'ok' && !redacted) || dirty ? (
         <div className="editor-toolbar">
           {showModes && load === 'ok' && !redacted && (
@@ -304,7 +334,7 @@ export function EditorModal({
         </div>
       )}
 
-      <div className="editor-body">
+      <div className="editor-body" ref={bodyRef}>
         {load === 'loading' && <div className="editor-msg">loading…</div>}
         {load === 'tooLarge' && <div className="editor-msg">File is larger than 2&nbsp;MB — not editable here.</div>}
         {load === 'missing' && <div className="editor-msg">File not found.</div>}
@@ -343,6 +373,11 @@ export function EditorModal({
       <div className="editor-status">
         <span>{entry.id}</span>
         <span className="editor-status-spacer" />
+        {zoom !== 1 && (
+          <button className="editor-zoom" title="Reset zoom (Ctrl+scroll to change)" onClick={() => setZoom(1)}>
+            {Math.round(zoom * 100)}%
+          </button>
+        )}
         {notice && <span className="editor-notice">{notice}</span>}
         {load === 'ok' && !binary && <span className="editor-watching">● watching disk</span>}
       </div>
