@@ -13,6 +13,8 @@
   --fg-dim: #8b93a7;
   --fg-mute: #5b6273;
   --accent: #7aa2f7;
+  /* legible text on an accent-colored fill; applyTheme() overrides per theme */
+  --accent-fg: #ffffff;
   --skill: #bb9af7;
   --green: #9ece6a;
   --amber: #e0af68;
@@ -3370,16 +3372,53 @@ body {
 }
 
 /* ── CodeMirror container ────────────────────────────────────────────────── */
-.code-editor-cm {
+.code-editor-cm,
+.md-live-editor {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
-.code-editor-cm .cm-editor {
+.code-editor-cm .cm-editor,
+.md-live-editor .cm-editor {
   flex: 1 1 auto;
   height: 100%;
+}
+
+/* ---------- "Add to chat" selection button (CodeMirror tooltip) ---------- */
+/* strip the tooltip's default panel chrome so just the pill shows (!important
+   beats both editor themes and CodeMirror's base tooltip rule) */
+.cm-tooltip:has(.cm-add-to-chat) {
+  background: none !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  outline: none !important;
+}
+.cm-add-to-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--accent-fg, #fff);
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  padding: 5px 9px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+.cm-add-to-chat-btn:hover {
+  filter: brightness(1.08);
+}
+.cm-add-to-chat-btn:active {
+  transform: translateY(1px);
 }
 
 /* ── CodeMirror syntax token colors (classHighlighter → CSS vars) ────────── */
@@ -3474,6 +3513,11 @@ body {
   overflow: auto;
   padding: 16px;
   background: var(--bg);
+  /* the image is a drag source — drop it into a session to type its path */
+  cursor: grab;
+}
+.viewer-image:active {
+  cursor: grabbing;
 }
 .viewer-image img {
   max-width: 100%;

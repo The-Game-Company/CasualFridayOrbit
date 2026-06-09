@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { FileViewerProps } from '../../file-types/types'
+import { SelectionAddToChat } from './SelectionAddToChat'
 
 function parseCsv(text: string, sep: string): string[][] {
   const rows: string[][] = []
@@ -26,8 +27,9 @@ function parseCsv(text: string, sep: string): string[][] {
   return rows
 }
 
-export function CsvViewer({ path, buffer, mode, onBufferChange, dirty, onSave }: FileViewerProps): JSX.Element {
+export function CsvViewer({ path, buffer, mode, onBufferChange, onSave, onAddSelectionToChat }: FileViewerProps): JSX.Element {
   const sep = path.endsWith('.tsv') ? '\t' : ','
+  const ref = useRef<HTMLDivElement>(null)
   const [sortCol, setSortCol] = useState<number | null>(null)
   const [sortAsc, setSortAsc] = useState(true)
 
@@ -70,7 +72,8 @@ export function CsvViewer({ path, buffer, mode, onBufferChange, dirty, onSave }:
   if (headers.length === 0) return <div className="viewer-empty">No data</div>
 
   return (
-    <div className="viewer-csv">
+    <div className="viewer-csv" ref={ref}>
+      <SelectionAddToChat containerRef={ref} onAdd={onAddSelectionToChat} />
       <div className="csv-meta">{dataRows.length} rows × {headers.length} columns</div>
       <div className="csv-scroll">
         <table className="csv-table">
@@ -87,7 +90,7 @@ export function CsvViewer({ path, buffer, mode, onBufferChange, dirty, onSave }:
           </thead>
           <tbody>
             {sorted.map((row, ri) => (
-              <tr key={ri}>
+              <tr key={ri} data-row={ri + 1}>
                 <td className="csv-rownum">{ri + 1}</td>
                 {headers.map((_, ci) => (
                   <td key={ci} className="csv-td" title={row[ci]}>{row[ci] ?? ''}</td>

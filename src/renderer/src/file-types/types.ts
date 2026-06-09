@@ -1,6 +1,16 @@
 /** The rendering modes a viewer can offer. */
 export type ViewMode = 'edit' | 'preview' | 'table' | 'tree' | 'raw'
 
+/** A text selection inside a viewer, reported for the "Add to chat" action. */
+export interface SelectionRef {
+  /** raw selected text, exactly as it appears in the document */
+  text: string
+  /** 1-based line number where the selection starts */
+  startLine: number
+  /** 1-based line number where the selection ends */
+  endLine: number
+}
+
 /** Props passed to every FileViewer component. */
 export interface FileViewerProps {
   path: string
@@ -16,6 +26,12 @@ export interface FileViewerProps {
   leasedBy: string | null
   /** Called when the viewer wants to trigger a save (e.g. Ctrl+S in CodeEditor). */
   onSave?: () => void
+  /**
+   * When set, the viewer offers an "Add to chat" affordance on a text selection
+   * and reports the raw selected text + its 1-based line range. The shell turns
+   * this into a file-path/row/value reference for the agent. Undefined = off.
+   */
+  onAddSelectionToChat?: (sel: SelectionRef) => void
 }
 
 /** Describes one file-type handler — viewer + editor capabilities. */
@@ -33,6 +49,12 @@ export interface FileTypeEntry {
    * The first entry is the default unless defaultMode() overrides it.
    */
   modes: ViewMode[]
+  /**
+   * Per-mode label overrides for this file type, taking precedence over the
+   * global MODE_LABELS. Lets one type relabel a shared mode — e.g. markdown
+   * calls its editable 'preview' "Formatted" without affecting other viewers.
+   */
+  modeLabels?: Partial<Record<ViewMode, string>>
   /** Override the default mode for a specific path (e.g. preview for .md). */
   defaultMode?(path: string): ViewMode
   /** The React component that renders (and optionally edits) the file. */

@@ -16,7 +16,7 @@ import type {
   WorkspaceState
 } from '../../shared/events'
 import { applyEvent, initSession, tabWindows, type SessionState, type Tab } from './session-model'
-import { applyTheme, THEMES } from './themes'
+import { applyTheme, readableOn, THEMES } from './themes'
 import { Terminal, type TermHandle } from './components/Terminal'
 import { TabBar } from './components/TabBar'
 import { Pane } from './components/Pane'
@@ -30,7 +30,8 @@ import { ConfirmModal } from './components/ConfirmModal'
 import { UpdateModal } from './components/UpdateModal'
 import { ContextPanel } from './components/ContextPanel'
 import { FileTree } from './components/FileTree'
-import { EditorModal } from './components/EditorModal'
+import { startPathDrag } from './components/drag'
+import { EditorModal, type ChatRef } from './components/EditorModal'
 import { FileTypesHelp } from './components/FileTypesHelp'
 import { CoordPanel } from './components/CoordPanel'
 import { LogPanel } from './components/LogPanel'
@@ -356,7 +357,7 @@ export default function App(): JSX.Element {
   const [started, setStarted] = useState<Set<string>>(new Set())
   const [projMenu, setProjMenu] = useState<{ path: string; x: number; y: number } | null>(null)
   const [fileTabMenu, setFileTabMenu] = useState<{ path: string; x: number; y: number } | null>(null)
-  const [rightView, setRightView] = useState<'context' | 'files' | 'coord' | 'logs'>('context')
+  const [rightView, setRightView] = useState<'context' | 'files' | 'coord' | 'logs'>('files')
   // AGENTS+ACTIVITY collapsed to a slim header bar — auto-derived from the tab (FILES needs the
   // vertical space), manually toggleable until the next tab switch re-derives it
   const [actCollapsed, setActCollapsed] = useState(false)
@@ -845,8 +846,13 @@ export default function App(): JSX.Element {
   // color-code the UI with the active project's declared accent (revert to theme if none)
   useEffect(() => {
     const root = document.documentElement
-    if (projectInfo.accent) root.style.setProperty('--accent', projectInfo.accent)
-    else root.style.removeProperty('--accent')
+    if (projectInfo.accent) {
+      root.style.setProperty('--accent', projectInfo.accent)
+      root.style.setProperty('--accent-fg', readableOn(projectInfo.accent))
+    } else {
+      root.style.removeProperty('--accent')
+      root.style.removeProperty('--accent-fg')
+    }
   }, [projectInfo.accent])
 
   // re-target coordination/log watchers when their settings change (apply live)
@@ -871,9 +877,12 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!config) return
     applyTheme(config.theme)
-    // applyTheme rewrites every token (incl. --accent); restore the active
-    // project's accent override on top so a theme switch doesn't drop it
-    if (projectInfo.accent) document.documentElement.style.setProperty('--accent', projectInfo.accent)
+    // applyTheme rewrites every token (incl. --accent/--accent-fg); restore the
+    // active project's accent override on top so a theme switch doesn't drop it
+    if (projectInfo.accent) {
+      document.documentElement.style.setProperty('--accent', projectInfo.accent)
+      document.documentElement.style.setProperty('--accent-fg', readableOn(projectInfo.accent))
+    }
   }, [config?.theme, projectInfo.accent])
 
   // UI scaling: uiScale zooms the whole window (panels, text, icons, terminals alike);
@@ -1642,6 +1651,26 @@ export default function App(): JSX.Element {
     window.orbit.sessionInput(activeId, sk.command + ' ')
     handles.current.get(activeId)?.focus()
   }
+
+  // "Add to chat" from a file viewer: stage a `path:row` + raw-value reference in
+  // the focused session's input (bracketed paste, never submitted), then focus it
+  // so the user can write their question around it.
+  const addRefToChat = (ref: ChatRef): void => {
+    const target = activeIdRef.current
+    const handle = target ? handles.current.get(target) : null
+    if (!handle) return
+    const root = activeProjectRef.current
+    let rel = ref.path
+    if (root && ref.path.startsWith(root)) rel = ref.path.slice(root.length).replace(/^[\\/]+/, '') || ref.path
+    rel = rel.replace(/\\/g, '/')
+    const loc = ref.startLine === ref.endLine ? `${rel}:${ref.startLine}` : `${rel}:${ref.startLine}-${ref.endLine}`
+    // fence longer than any backtick run inside the selection, so code containing ``` survives
+    let maxTicks = 0
+    for (const run of ref.text.match(/`+/g) ?? []) maxTicks = Math.max(maxTicks, run.length)
+    const fence = '`'.repeat(Math.max(3, maxTicks + 1))
+    handle.paste(`${loc}\n${fence}\n${ref.text}\n${fence}\n`)
+    handle.focus()
+  }
   const saveConfig = (next: AppConfig): void => {
     const rootChanged = next.projectRoot !== config?.projectRoot
     setConfig(next)
@@ -1890,6 +1919,8 @@ export default function App(): JSX.Element {
                   <button
                     key={p}
                     className={`editor-tab${p === activeFilePath ? ' active' : ''}${dirtyFiles.has(p) ? ' dirty' : ''}`}
+                    draggable
+                    onDragStart={(e) => startPathDrag(e, p)}
                     onClick={() => setActiveFilePath(p)}
                     onContextMenu={(e) => { e.preventDefault(); setFileTabMenu({ path: p, x: e.clientX, y: e.clientY }) }}
                   >
@@ -1931,6 +1962,7 @@ export default function App(): JSX.Element {
                         })
                       }
                       onClose={() => closeFile(p)}
+                      onAddToChat={addRefToChat}
                     />
                   </div>
                 ))}

@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { FileViewerProps } from '../../file-types/types'
+import { SelectionAddToChat } from './SelectionAddToChat'
 
 // ─── single parsed line ───────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ function JsonlLineItem({ index, raw }: LineItemProps): JSX.Element {
   const preview = getPreview(parsed.data)
 
   return (
-    <div className={`jsonl-item ${!parsed.ok ? 'jsonl-err' : ''}`}>
+    <div data-row={index} className={`jsonl-item ${!parsed.ok ? 'jsonl-err' : ''}`}>
       <div className="jsonl-header" onClick={() => isObject && setOpen((o) => !o)}>
         <span className="jsonl-idx">{index}</span>
         {isObject && <span className="jsonl-caret">{open ? '▾' : '▸'}</span>}
@@ -73,8 +74,9 @@ function extractText(arr: unknown[]): string {
 
 const PAGE = 200
 
-export function JsonlViewer({ buffer, mode }: FileViewerProps): JSX.Element {
+export function JsonlViewer({ buffer, mode, onAddSelectionToChat }: FileViewerProps): JSX.Element {
   const [shown, setShown] = useState(PAGE)
+  const ref = useRef<HTMLDivElement>(null)
 
   const lines = useMemo(
     () => buffer.split('\n').filter((l) => l.trim()),
@@ -86,7 +88,8 @@ export function JsonlViewer({ buffer, mode }: FileViewerProps): JSX.Element {
   }
 
   return (
-    <div className="viewer-jsonl">
+    <div className="viewer-jsonl" ref={ref}>
+      <SelectionAddToChat containerRef={ref} onAdd={onAddSelectionToChat} />
       <div className="jsonl-meta">{lines.length} lines</div>
       {lines.slice(0, shown).map((line, i) => (
         <JsonlLineItem key={i} index={i} raw={line} />

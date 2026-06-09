@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { FileViewerProps } from '../../file-types/types'
+import { SelectionAddToChat } from './SelectionAddToChat'
 
 type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'none'
 
@@ -21,8 +22,9 @@ function detectLevel(line: string): LogLevel {
 
 const PAGE = 500
 
-export function LogViewer({ buffer, mode }: FileViewerProps): JSX.Element {
+export function LogViewer({ buffer, mode, onAddSelectionToChat }: FileViewerProps): JSX.Element {
   const [shown, setShown] = useState(PAGE)
+  const ref = useRef<HTMLDivElement>(null)
 
   const lines = useMemo(() => buffer.split('\n'), [buffer])
   const visible = lines.slice(0, shown)
@@ -30,13 +32,14 @@ export function LogViewer({ buffer, mode }: FileViewerProps): JSX.Element {
   if (mode === 'raw') return <pre className="viewer-raw">{buffer}</pre>
 
   return (
-    <div className="viewer-log">
+    <div className="viewer-log" ref={ref}>
+      <SelectionAddToChat containerRef={ref} onAdd={onAddSelectionToChat} />
       {visible.map((line, i) => {
         const level = detectLevel(line)
         const isStack = STACK_RE.test(line)
         const hasTs = TS_RE.test(line)
         return (
-          <div key={i} className={`log-line log-${level} ${isStack ? 'log-stack' : ''}`}>
+          <div key={i} data-row={i + 1} className={`log-line log-${level} ${isStack ? 'log-stack' : ''}`}>
             <span className="log-lnum">{i + 1}</span>
             <span className="log-text">
               {hasTs ? highlightTimestamps(line) : line}
