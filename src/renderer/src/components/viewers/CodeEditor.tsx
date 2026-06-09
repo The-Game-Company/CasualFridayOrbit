@@ -73,7 +73,7 @@ function getLanguage(path: string): ReturnType<typeof javascript> | ReturnType<t
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
-    fontSize: '13px',
+    fontSize: 'calc(13px * var(--preview-zoom, 1))',
     fontFamily: "'Cascadia Code', Consolas, 'Courier New', monospace",
     background: 'var(--bg)',
     color: 'var(--fg)',
@@ -85,7 +85,7 @@ const editorTheme = EditorView.theme({
     background: 'var(--bg)',
     borderRight: '1px solid var(--line)',
     color: 'var(--fg-mute)',
-    fontSize: '12px',
+    fontSize: 'calc(12px * var(--preview-zoom, 1))',
     userSelect: 'none',
   },
   '.cm-lineNumbers .cm-gutterElement': { padding: '0 8px 0 12px', minWidth: '2.5em' },

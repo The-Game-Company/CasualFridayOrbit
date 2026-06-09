@@ -24,6 +24,12 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
     items: [[['Ctrl', 'Shift', '↑/↓'], 'Move to the previous / next project']]
   },
   {
+    title: 'File viewer',
+    items: [
+      [['Alt/Ctrl', 'Shift', '←/→'], 'Resize the file viewer width (when it has focus)']
+    ]
+  },
+  {
     title: 'App',
     items: [
       [['Ctrl', ','], 'Settings'],

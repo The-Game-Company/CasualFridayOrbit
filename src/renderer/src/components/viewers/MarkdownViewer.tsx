@@ -35,6 +35,30 @@ export function MarkdownViewer(props: FileViewerProps): JSX.Element {
     return () => el.removeEventListener('click', handler)
   }, [html])
 
+  // Keyboard caret/word selection in a non-editable div: the browser only does this in
+  // editable fields, so drive it manually with Selection.modify (works on read-only content).
+  useEffect(() => {
+    const el = previewRef.current
+    if (!el) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      const dir =
+        e.key === 'ArrowLeft' ? 'left' : e.key === 'ArrowRight' ? 'right'
+        : e.key === 'ArrowUp' ? 'backward' : e.key === 'ArrowDown' ? 'forward' : null
+      if (!dir) return
+      const sel = window.getSelection()
+      if (!sel) return
+      const alter = e.shiftKey ? 'extend' : 'move'
+      // Ctrl+Shift+Arrow → by word/line; plain Arrow falls through to normal behavior
+      const horizontal = dir === 'left' || dir === 'right'
+      const granularity = e.ctrlKey ? (horizontal ? 'word' : 'line') : (horizontal ? 'character' : 'line')
+      if (!e.ctrlKey && !e.shiftKey) return // let the browser handle bare arrows (scrolling)
+      e.preventDefault()
+      sel.modify(alter, dir, granularity)
+    }
+    el.addEventListener('keydown', onKeyDown)
+    return () => el.removeEventListener('keydown', onKeyDown)
+  }, [html])
+
   if (mode === 'edit') {
     return (
       <CodeEditor
@@ -56,6 +80,7 @@ export function MarkdownViewer(props: FileViewerProps): JSX.Element {
     <div
       ref={previewRef}
       className="md-preview"
+      tabIndex={0}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

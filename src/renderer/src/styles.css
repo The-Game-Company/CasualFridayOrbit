@@ -752,6 +752,11 @@ body {
 .dropdown-item.disabled:hover {
   background: transparent;
 }
+.dropdown-separator {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 6px;
+}
 .mcp-feedback {
   padding: 2px 8px 6px;
   font-size: 11px;
@@ -1956,6 +1961,49 @@ body {
   flex-direction: column;
   gap: 16px;
 }
+
+/* ---------- settings modal ---------- */
+.settings-modal {
+  width: 520px;
+}
+.settings-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  padding: 0 4px;
+}
+.settings-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-mute);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 14px 7px;
+  transition: color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+}
+.settings-tab:hover {
+  color: var(--fg);
+}
+.settings-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.settings-body {
+  min-height: 200px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.settings-indent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 20px;
+  border-left: 2px solid var(--line);
+  margin-left: 2px;
+}
 .update-modal {
   width: 420px;
 }
@@ -2610,6 +2658,18 @@ body {
 .editor-watching {
   color: var(--accent);
 }
+.editor-zoom {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  border-radius: 4px;
+  padding: 0 6px;
+  cursor: pointer;
+  font: inherit;
+}
+.editor-zoom:hover {
+  color: var(--fg);
+}
 
 /* conflict resolution dialog */
 .conflict-overlay {
@@ -2801,7 +2861,11 @@ body {
   padding: 16px 28px;
   color: var(--fg);
   line-height: 1.6;
-  font-size: 14px;
+  font-size: calc(14px * var(--preview-zoom, 1));
+}
+.md-preview:focus,
+.md-preview:focus-visible {
+  outline: none;
 }
 .md-preview h1,
 .md-preview h2,

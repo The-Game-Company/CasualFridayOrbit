@@ -183,6 +183,9 @@ export type ThemeName =
   | 'gruvbox'
   | 'nord'
   | 'dracula'
+  | 'dracula-slate'
+  | 'dracula-rose'
+  | 'dracula-void'
   | 'light'
   | 'solarized-light'
 
@@ -313,6 +316,8 @@ export interface PersistedSession {
   resumeId?: string
   /** most recent user prompt, so the pinned-prompt bar can show it after a restore */
   lastPrompt?: string
+  /** recently touched files (most recent first), so the recents panel survives a restart */
+  recentFiles?: string[]
 }
 
 /**
@@ -340,6 +345,12 @@ export interface WorkspaceState {
   tabs: PersistedTab[]
   activeProject: string | null
   activeTabId: string | null
+  /** open file-viewer tabs (absolute paths) in tab order, so they reopen after a restart */
+  openEditors?: string[]
+  /** which open file-viewer tab is focused */
+  activeEditor?: string | null
+  /** per-project open-editor lists, for when `openFilesPerProject` is enabled */
+  editorsByProject?: Record<string, { files: string[]; active: string | null }>
   /** @deprecated legacy pre-hierarchy fields — read only to migrate old workspaces. */
   panesByProject?: Record<string, string[]>
   /** @deprecated legacy focused-session id — used only to seed activeTabId on migration. */
@@ -382,6 +393,7 @@ export const IPC = {
   LogWatch: 'log:watch',
   LogUnwatch: 'log:unwatch',
   LogUpdate: 'log:update',
+  OpenInExplorer: 'shell:openInExplorer',
   // window chrome (single-bar mode: tab bar acts as the titlebar)
   MenuPopup: 'menu:popup',
   TitleBarTheme: 'titlebar:theme',

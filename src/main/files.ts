@@ -105,38 +105,47 @@ export async function saveTextFile(
 }
 
 /**
- * Watches exactly one file at a time (the one open in the editor) and pushes its latest
- * content whenever it changes on disk — regardless of who changed it (agent or otherwise).
+ * Watches the set of files currently open in the editor (one chokidar watcher per file) and
+ * pushes a file's latest content whenever it changes on disk — regardless of who changed it
+ * (agent or otherwise). Each open tab watches its own path independently, so a background tab
+ * stays live just like the focused one.
  */
 export class FileWatcher {
-  private watcher: FSWatcher | null = null
-  private target: string | null = null
+  private watchers = new Map<string, FSWatcher>()
 
   constructor(private onChange: (c: ExternalChange) => void) {}
 
   watch(file: string): void {
-    this.unwatch()
-    this.target = file
-    this.watcher = chokidar.watch(file, { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 120 } })
+    if (this.watchers.has(file)) return // already watching this path
+    const watcher = chokidar.watch(file, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 120 }
+    })
+    this.watchers.set(file, watcher)
     const push = (): void => {
-      if (this.target !== file) return
+      if (!this.watchers.has(file)) return
       void readTextFile(file).then((r) => {
-        if (this.target !== file) return // unwatched/retargeted while the read was in flight
+        if (!this.watchers.has(file)) return // unwatched while the read was in flight
         if (r.ok) this.onChange({ path: file, content: r.content, hash: r.hash, mtimeMs: r.mtimeMs })
       })
     }
-    this.watcher.on('change', push)
-    this.watcher.on('add', push)
-    this.watcher.on('unlink', () => {
-      if (this.target === file) this.onChange({ path: file, deleted: true })
+    watcher.on('change', push)
+    watcher.on('add', push)
+    watcher.on('unlink', () => {
+      if (this.watchers.has(file)) this.onChange({ path: file, deleted: true })
     })
   }
 
-  unwatch(): void {
-    this.target = null
-    if (this.watcher) {
-      void this.watcher.close()
-      this.watcher = null
+  unwatch(file: string): void {
+    const watcher = this.watchers.get(file)
+    if (watcher) {
+      void watcher.close()
+      this.watchers.delete(file)
     }
+  }
+
+  unwatchAll(): void {
+    for (const watcher of this.watchers.values()) void watcher.close()
+    this.watchers.clear()
   }
 }
