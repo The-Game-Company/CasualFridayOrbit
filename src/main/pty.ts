@@ -48,11 +48,20 @@ function resolveShell(kind: TermKind): { file: string; args: string[] } {
 }
 
 /**
- * Resolve the real `claude` executable. We search PATH first (this picks up the WinGet
- * shim), then fall back to known install locations.
+ * Resolve the real `claude` executable. We prefer the native install (~/.local/bin) because
+ * it self-updates, whereas a WinGet/npm shim earlier on PATH can be frozen at an older version
+ * and silently shadow it. After that we search PATH, then fall back to known install locations.
  */
 export function resolveClaudePath(): string {
   const exe = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  // Native installer location, checked directly (not via PATH) so an Electron relaunch that
+  // inherited a stale PATH still finds it.
+  const native = path.join(os.homedir(), '.local', 'bin', exe)
+  try {
+    if (fs.existsSync(native)) return native
+  } catch {
+    /* ignore */
+  }
   const onPath = findOnPath(exe)
   if (onPath) return onPath
   // npm's global install ships only shims (claude.cmd/.ps1), no claude.exe — pick up the .cmd.
@@ -70,7 +79,6 @@ export function resolveClaudePath(): string {
     ),
     // npm global shim location ($APPDATA\npm\claude.cmd) when it isn't on PATH.
     path.join(process.env.APPDATA || '', 'npm', 'claude.cmd'),
-    path.join(os.homedir(), '.local', 'bin', exe),
     '/opt/homebrew/bin/claude', // Apple Silicon Homebrew
     '/usr/local/bin/claude' // Intel Homebrew / common /usr/local install
   ]
