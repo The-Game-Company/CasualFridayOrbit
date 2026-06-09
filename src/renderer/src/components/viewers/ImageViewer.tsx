@@ -1,4 +1,5 @@
 import type { FileViewerProps } from '../../file-types/types'
+import { startPathDrag } from '../drag'
 import { CodeEditor } from './CodeEditor'
 
 function pathToFileUrl(p: string): string {
@@ -23,9 +24,12 @@ export function ImageViewer(props: FileViewerProps): JSX.Element {
   const url = pathToFileUrl(path)
   const name = baseName(path)
 
+  // The container is the drag source (drops the file's path into a session); the <img> itself is
+  // non-draggable so its native image drag — a file:// uri-list that would navigate the window —
+  // never takes over.
   return (
-    <div className="viewer-image">
-      <img src={url} alt={name} />
+    <div className="viewer-image" draggable onDragStart={(e) => startPathDrag(e, path)}>
+      <img src={url} alt={name} draggable={false} />
     </div>
   )
 }

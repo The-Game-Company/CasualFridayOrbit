@@ -108,6 +108,9 @@ registerFileType({
   id: 'markdown',
   score: (p, binary) => (!binary && ['md', 'mdx', 'markdown'].includes(ext(p)) ? 90 : 0),
   modes: ['preview', 'edit'],
+  // 'preview' is an editable, live-rendered surface for markdown — call it "Formatted"
+  // (vs. "Code", the raw source). Other 'preview' viewers keep the global label.
+  modeLabels: { preview: 'Formatted' },
   defaultMode: () => 'preview',
   Viewer: MarkdownViewer,
   editable: true,

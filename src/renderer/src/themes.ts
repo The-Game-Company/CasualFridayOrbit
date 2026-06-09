@@ -557,12 +557,33 @@ export const THEME_LIST: { name: ThemeName; label: string; appearance: Theme['ap
  * Because every token is written here, switching themes can never leave a
  * stale value behind from a previous theme.
  */
+/**
+ * Pick black or white text for legibility on top of a solid background color.
+ * Uses WCAG relative luminance and chooses whichever gives the higher contrast,
+ * so it adapts to bright (e.g. neon green) and dark accents alike.
+ */
+export function readableOn(color: string): string {
+  let hex = color.trim().replace(/^#/, '')
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('')
+  if (hex.length !== 6) return '#ffffff'
+  const chan = (i: number): number => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  }
+  const L = 0.2126 * chan(0) + 0.7152 * chan(2) + 0.0722 * chan(4)
+  const contrastBlack = (L + 0.05) / 0.05
+  const contrastWhite = 1.05 / (L + 0.05)
+  return contrastBlack >= contrastWhite ? '#000000' : '#ffffff'
+}
+
 export function applyTheme(name: ThemeName): void {
   const theme = THEMES[name] ?? THEMES['tokyo-night']
   const root = document.documentElement
   for (const [token, value] of Object.entries(theme.ui)) {
     root.style.setProperty(`--${token}`, value)
   }
+  // legible text color for elements painted on the accent (buttons, chips)
+  root.style.setProperty('--accent-fg', readableOn(theme.ui.accent))
   // expose appearance for any CSS / native widgets that care (e.g. form controls)
   root.dataset.theme = name
   root.style.colorScheme = theme.appearance

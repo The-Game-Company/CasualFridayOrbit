@@ -13,6 +13,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { THEMES } from '../themes'
+import { isPathDrag, pathFromDrag } from './drag'
 import type { ThemeName, TermKind, QuickPrompt } from '../../../shared/events'
 
 const FONT_FAMILY =
@@ -28,6 +29,8 @@ export interface TermHandle {
   /** drop the scrollback only — the visible screen stays (used when claude is /clear-ed) */
   clearScrollback: () => void
   focus: () => void
+  /** bracketed-paste text into the input box (never submits — same path as Ctrl+V) */
+  paste: (text: string) => void
 }
 
 interface Props {
@@ -177,7 +180,8 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     // ED 3 (CSI 3 J) erases only the saved-lines buffer, so claude's freshly painted
     // post-/clear screen survives — just the old conversation above it goes away.
     clearScrollback: () => termRef.current?.write('\x1b[3J'),
-    focus: () => termRef.current?.focus()
+    focus: () => termRef.current?.focus(),
+    paste: (text: string) => termRef.current?.paste(text)
   }))
 
   // Create the xterm + backend session once.
@@ -356,25 +360,32 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     term.focus()
   }
 
-  // Files/folders dragged in from the OS (Explorer/Finder): type their paths into the session,
-  // each wrapped in quotes so paths with spaces survive. Internal pane-rearrange drags carry
-  // text/plain, not Files, so they fall through to the grid's own drop handling untouched.
+  // Paths dragged into the session get typed in, each wrapped in quotes so paths with spaces
+  // survive. Two sources count: files/folders from the OS (Explorer/Finder, carrying `Files`)
+  // and in-app drags of a file row / editor tab / image viewer (carrying our private path MIME).
+  // Pane-rearrange drags carry neither, so they fall through to the grid's own drop handling.
   const [dropActive, setDropActive] = useState(false)
   const isFileDrag = (e: DragEvent): boolean => e.dataTransfer.types.includes('Files')
-  const handleDrop = (e: DragEvent): void => {
-    setDropActive(false)
-    if (!isFileDrag(e)) return
-    e.preventDefault()
-    e.stopPropagation()
-    const paths = Array.from(e.dataTransfer.files)
-      .map((f) => window.orbit.getPathForFile(f))
-      .filter(Boolean)
+  const isDroppable = (e: DragEvent): boolean => isFileDrag(e) || isPathDrag(e)
+  const typePaths = (paths: string[]): void => {
     if (!paths.length) return
     const term = termRef.current
     if (!term) return
     // bracketed paste (same as Ctrl+V) so claude treats it as typed text, never a submit
     term.paste(paths.map((p) => `"${p}"`).join(' ') + ' ')
     term.focus()
+  }
+  const handleDrop = (e: DragEvent): void => {
+    setDropActive(false)
+    if (!isDroppable(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (isFileDrag(e)) {
+      typePaths(Array.from(e.dataTransfer.files).map((f) => window.orbit.getPathForFile(f)).filter(Boolean))
+    } else {
+      const p = pathFromDrag(e)
+      if (p) typePaths([p])
+    }
   }
 
   // becoming active -> the pane was hidden (0-size) or just un-hidden; re-fit once layout
@@ -399,7 +410,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     <div
       className={dropActive ? 'terminal-host file-drop' : 'terminal-host'}
       onDragOver={(e) => {
-        if (!isFileDrag(e)) return
+        if (!isDroppable(e)) return
         e.preventDefault()
         e.stopPropagation()
         e.dataTransfer.dropEffect = 'copy'

@@ -9,6 +9,7 @@ import {
   dropCursor,
   rectangularSelection,
   crosshairCursor,
+  tooltips,
 } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands'
@@ -40,6 +41,7 @@ import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { go } from '@codemirror/legacy-modes/mode/go'
 import { csharp } from '@codemirror/legacy-modes/mode/clike'
 import type { FileViewerProps } from '../../file-types/types'
+import { addToChatTooltip } from './add-to-chat'
 
 function ext(p: string): string {
   const i = p.lastIndexOf('.')
@@ -132,15 +134,23 @@ const editorTheme = EditorView.theme({
   '.cm-diagnostic': { padding: '4px 8px' },
   '.cm-diagnostic-error': { borderLeft: '3px solid var(--red)' },
   '.cm-diagnostic-warning': { borderLeft: '3px solid var(--amber)' },
-})
+}, { dark: true })
 
-export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerProps): JSX.Element {
+export function CodeEditor({
+  path,
+  buffer,
+  onBufferChange,
+  onSave,
+  onAddSelectionToChat,
+}: FileViewerProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onBufferChangeRef = useRef(onBufferChange)
   onBufferChangeRef.current = onBufferChange
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
+  const onAddSelRef = useRef(onAddSelectionToChat)
+  onAddSelRef.current = onAddSelectionToChat
   // Track the last value that crossed the editor↔parent boundary (either direction) so we
   // can tell our own push echoing back as a prop from a genuine external change
   const lastPushed = useRef(buffer)
@@ -225,6 +235,10 @@ export function CodeEditor({ path, buffer, onBufferChange, onSave }: FileViewerP
         ]),
         saveKeymap,
         ...langExts,
+        // fixed positioning keeps tooltips (autocomplete, the selection "Add to
+        // chat" button) from being clipped by the editor's overflow container
+        tooltips({ position: 'fixed' }),
+        addToChatTooltip(() => onAddSelRef.current),
         updateListener,
         blurFlush,
         editorTheme,

@@ -3,7 +3,10 @@ import { DiffView } from './DiffView'
 import { MergeEditor } from './MergeEditor'
 import { resolveFileType } from '../file-types/index'
 import { MODE_LABELS } from '../file-types/registry'
-import type { ViewMode } from '../file-types/types'
+import type { ViewMode, SelectionRef } from '../file-types/types'
+
+/** A selection promoted to an agent reference: the file path plus the selection. */
+export type ChatRef = SelectionRef & { path: string }
 
 // ─── secret detection (shell-level banner only) ───────────────────────────────
 const SECRET_RE =
@@ -44,6 +47,8 @@ interface Props {
   onConfirmCloseHandled: () => void
   onDirtyChange: (dirty: boolean) => void
   onClose: () => void
+  /** Send a selection (file path + row range + raw text) to the agent's input. */
+  onAddToChat?: (ref: ChatRef) => void
 }
 
 function baseName(p: string): string {
@@ -60,6 +65,7 @@ export function EditorModal({
   onConfirmCloseHandled,
   onDirtyChange,
   onClose,
+  onAddToChat,
 }: Props): JSX.Element {
   // ── file type resolution ───────────────────────────────────────────────────
   const earlyEntry = useMemo(() => resolveFileType(path, false), [path])
@@ -288,7 +294,7 @@ export function EditorModal({
             <span className="seg seg-sm">
               {entry.modes.map((m) => (
                 <button key={m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>
-                  {MODE_LABELS[m]}
+                  {entry.modeLabels?.[m] ?? MODE_LABELS[m]}
                 </button>
               ))}
             </span>
@@ -357,6 +363,7 @@ export function EditorModal({
             busy={busy}
             leasedBy={leasedBy}
             onSave={() => save(false)}
+            onAddSelectionToChat={onAddToChat ? (sel) => onAddToChat({ path, ...sel }) : undefined}
           />
         )}
 
