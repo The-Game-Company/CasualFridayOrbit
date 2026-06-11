@@ -5,9 +5,9 @@ import crypto from 'node:crypto'
 import { Worker } from 'node:worker_threads'
 import chokidar, { type FSWatcher } from 'chokidar'
 import type { ExternalChange, FileNode, ReadFileResult, SaveResult } from '../shared/events'
+import { MAX_EDIT_BYTES } from '../shared/limits'
 
 const IGNORE = new Set(['node_modules', '.git'])
-const MAX_EDIT_BYTES = 2 * 1024 * 1024 // 2 MB editable cap
 
 export function hashContent(s: string): string {
   return crypto.createHash('sha1').update(s, 'utf8').digest('hex')

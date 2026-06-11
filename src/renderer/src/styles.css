@@ -2479,6 +2479,78 @@ body {
 .dot-dirty {
   color: var(--amber);
 }
+
+/* ── find bar ─────────────────────────────────────────────────────────────── */
+.find-bar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.find-input {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+  font-size: 12px;
+  width: 160px;
+}
+.find-input.invalid {
+  border-color: var(--red);
+}
+.find-count {
+  color: var(--fg-mute);
+  font-size: 12px;
+  min-width: 44px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.find-toggle,
+.find-nav,
+.find-close {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  border-radius: 4px;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.find-toggle:hover,
+.find-nav:hover,
+.find-close:hover {
+  color: var(--fg);
+}
+.find-toggle.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.find-close {
+  background: transparent;
+  border: none;
+  font-size: 15px;
+  padding: 0 4px;
+}
+
+/* CSS Custom Highlight API styles used by the generic DOM search controller. */
+::highlight(orbit-find) {
+  background-color: color-mix(in srgb, var(--amber) 35%, transparent);
+}
+::highlight(orbit-find-active) {
+  background-color: var(--amber);
+  color: #1a1a1a;
+}
 .editor-toolbar {
   display: flex;
   align-items: center;
@@ -3629,6 +3701,40 @@ body {
   font-family: inherit;
 }
 .jt-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── JSON tree viewer: virtualized rows ───────────────────────────────────── */
+/* The scrolling element. Fixed-height absolutely-positioned rows live inside .jt-spacer. */
+.jt-scroll {
+  height: 100%;
+  flex: 1 1 auto;
+  overflow: auto;
+  position: relative;
+  padding: 0;
+  background: var(--bg);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 13px;
+}
+.jt-spacer {
+  position: relative;
+  width: 100%;
+}
+.jt-vrow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  padding-right: 12px;
+}
+/* leaf value: clip long strings to the fixed-height row instead of wrapping */
+.jt-vrow .jt-val {
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
 
 /* ── JSONL viewer ─────────────────────────────────────────────────────────── */
 .viewer-jsonl {
