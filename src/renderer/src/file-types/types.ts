@@ -1,6 +1,38 @@
 /** The rendering modes a viewer can offer. */
 export type ViewMode = 'edit' | 'preview' | 'table' | 'tree' | 'raw'
 
+/** User-toggled options for a find query. */
+export interface SearchOptions {
+  caseSensitive: boolean
+  wholeWord: boolean
+  regex: boolean
+}
+
+/** The result of applying / navigating a find query, shown in the find bar. */
+export interface SearchState {
+  /** number of matches (0 if none / empty query) */
+  total: number
+  /** 1-based index of the active match; 0 when total === 0 */
+  current: number
+  /** true when regex mode and the pattern doesn't compile */
+  invalid?: boolean
+}
+
+/**
+ * Imperative search interface a viewer (or the generic DOM searcher) exposes to the
+ * shell's find bar. The shell drives it; the viewer owns the highlighting/scrolling.
+ */
+export interface SearchController {
+  /** apply query, highlight all, move to first match; empty query clears → {total:0,current:0} */
+  setQuery(query: string, opts: SearchOptions): SearchState
+  /** advance active match (wraps to first) */
+  next(): SearchState
+  /** active match backwards (wraps to last) */
+  prev(): SearchState
+  /** remove all highlights/decorations (find bar closed / file switched) */
+  clear(): void
+}
+
 /** A text selection inside a viewer, reported for the "Add to chat" action. */
 export interface SelectionRef {
   /** raw selected text, exactly as it appears in the document */
@@ -32,6 +64,12 @@ export interface FileViewerProps {
    * this into a file-path/row/value reference for the agent. Undefined = off.
    */
   onAddSelectionToChat?: (sel: SelectionRef) => void
+  /**
+   * Register an imperative search controller with the shell's find bar (call with the controller
+   * on mount via useEffect, and null on unmount). If a viewer does NOT register one, the shell
+   * searches the viewer's rendered DOM generically.
+   */
+  onRegisterSearch?: (controller: SearchController | null) => void
 }
 
 /** Describes one file-type handler — viewer + editor capabilities. */
@@ -70,4 +108,10 @@ export interface FileTypeEntry {
    * the text read and passes binary=true + buffer='' to the viewer.
    */
   handlesBinary?: boolean
+  /**
+   * True when this viewer scales to large files on its own (e.g. virtualized rendering),
+   * so EditorModal should NOT downgrade it to the plain "lean" code editor above
+   * LEAN_EDIT_BYTES. Viewers without this flag get the lean fallback for big files.
+   */
+  handlesLarge?: boolean
 }

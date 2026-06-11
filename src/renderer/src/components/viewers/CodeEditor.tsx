@@ -10,8 +10,11 @@ import {
   rectangularSelection,
   crosshairCursor,
   tooltips,
+  Decoration,
+  ViewPlugin,
 } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import type { DecorationSet, ViewUpdate } from '@codemirror/view'
+import { EditorState, StateField, StateEffect, RangeSetBuilder } from '@codemirror/state'
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands'
 import {
   foldGutter,
@@ -24,7 +27,7 @@ import {
 } from '@codemirror/language'
 import { classHighlighter } from '@lezer/highlight'
 import { closeBrackets, autocompletion, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { highlightSelectionMatches, SearchCursor, RegExpCursor } from '@codemirror/search'
 import { lintKeymap, linter } from '@codemirror/lint'
 import { javascript } from '@codemirror/lang-javascript'
 import { json, jsonParseLinter } from '@codemirror/lang-json'
@@ -40,8 +43,118 @@ import { markdown } from '@codemirror/lang-markdown'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { go } from '@codemirror/legacy-modes/mode/go'
 import { csharp } from '@codemirror/legacy-modes/mode/clike'
-import type { FileViewerProps } from '../../file-types/types'
+import type { FileViewerProps, SearchController, SearchOptions, SearchState } from '../../file-types/types'
 import { addToChatTooltip } from './add-to-chat'
+
+// ─── find / search extension ─────────────────────────────────────────────────
+
+const MAX_MATCHES = 5000
+
+interface FindMatch {
+  from: number
+  to: number
+}
+
+/** Effect that replaces the stored matches + active index. */
+const setFind = StateEffect.define<{ matches: FindMatch[]; active: number }>()
+
+interface FindData {
+  matches: FindMatch[]
+  active: number
+}
+
+/** Holds the current find matches. Reset to empty on any document change (the shell re-runs). */
+const findField = StateField.define<FindData>({
+  create: () => ({ matches: [], active: -1 }),
+  update(value, tr) {
+    let next = value
+    for (const e of tr.effects) {
+      if (e.is(setFind)) next = { matches: e.value.matches, active: e.value.active }
+    }
+    if (tr.docChanged && next === value) return { matches: [], active: -1 }
+    return next
+  },
+})
+
+const matchDeco = Decoration.mark({ class: 'cm-find-match' })
+const activeDeco = Decoration.mark({ class: 'cm-find-match cm-find-active' })
+
+/** Decorate only the matches intersecting the viewport, so huge docs stay cheap. */
+const findHighlighter = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet
+    constructor(view: EditorView) {
+      this.decorations = this.build(view)
+    }
+    update(u: ViewUpdate): void {
+      if (u.docChanged || u.viewportChanged || u.transactions.some((t) => t.effects.some((e) => e.is(setFind)))) {
+        this.decorations = this.build(u.view)
+      }
+    }
+    build(view: EditorView): DecorationSet {
+      const { matches, active } = view.state.field(findField)
+      const builder = new RangeSetBuilder<Decoration>()
+      if (matches.length === 0) return builder.finish()
+      const ranges = view.visibleRanges
+      for (let i = 0; i < matches.length; i++) {
+        const m = matches[i]
+        // skip matches fully outside every visible range
+        let visible = false
+        for (const vr of ranges) {
+          if (m.to >= vr.from && m.from <= vr.to) {
+            visible = true
+            break
+          }
+        }
+        if (!visible) continue
+        builder.add(m.from, m.to, i === active ? activeDeco : matchDeco)
+      }
+      return builder.finish()
+    }
+  },
+  { decorations: (v) => v.decorations }
+)
+
+const findExtension = [findField, findHighlighter]
+
+/** A char that is part of a "word" — used for whole-word literal search boundary checks. */
+function isWordChar(ch: string): boolean {
+  return /[A-Za-z0-9_]/.test(ch)
+}
+
+/** Compute matches for a (query, opts) pair over the whole doc. Returns null when regex is invalid. */
+function computeMatches(view: EditorView, query: string, opts: SearchOptions): FindMatch[] | null {
+  const doc = view.state.doc
+  const len = doc.length
+  const matches: FindMatch[] = []
+  try {
+    if (opts.regex) {
+      const pattern = opts.wholeWord ? `\\b(?:${query})\\b` : query
+      const cursor = new RegExpCursor(doc, pattern, { ignoreCase: !opts.caseSensitive })
+      for (const m of cursor) {
+        matches.push({ from: m.from, to: m.to })
+        if (matches.length >= MAX_MATCHES) break
+      }
+    } else {
+      const fold = opts.caseSensitive ? undefined : (s: string) => s.toLowerCase()
+      const test = opts.wholeWord
+        ? (from: number, to: number): boolean => {
+            const before = from > 0 ? doc.sliceString(from - 1, from) : ''
+            const after = to < len ? doc.sliceString(to, to + 1) : ''
+            return !isWordChar(before) && !isWordChar(after)
+          }
+        : undefined
+      const cursor = new SearchCursor(doc, query, 0, len, fold, test)
+      while (!cursor.next().done) {
+        matches.push({ from: cursor.value.from, to: cursor.value.to })
+        if (matches.length >= MAX_MATCHES) break
+      }
+    }
+  } catch {
+    return null
+  }
+  return matches
+}
 
 function ext(p: string): string {
   const i = p.lastIndexOf('.')
@@ -101,6 +214,8 @@ const editorTheme = EditorView.theme({
   '.cm-nonmatchingBracket': { outline: '1px solid var(--red)', color: 'var(--red)' },
   '.cm-searchMatch': { background: 'color-mix(in srgb, var(--amber) 30%, transparent)', outline: '1px solid var(--amber)' },
   '.cm-searchMatch.cm-searchMatch-selected': { background: 'color-mix(in srgb, var(--amber) 60%, transparent)' },
+  '.cm-find-match': { backgroundColor: 'color-mix(in srgb, var(--amber) 30%, transparent)' },
+  '.cm-find-active': { backgroundColor: 'var(--amber)', color: '#1a1a1a' },
   '.cm-panels': { background: 'var(--bg-2)', color: 'var(--fg)', borderTop: '1px solid var(--line)' },
   '.cm-panels input': {
     background: 'var(--bg-3)',
@@ -142,9 +257,15 @@ export function CodeEditor({
   onBufferChange,
   onSave,
   onAddSelectionToChat,
+  onRegisterSearch,
 }: FileViewerProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const onRegisterSearchRef = useRef(onRegisterSearch)
+  onRegisterSearchRef.current = onRegisterSearch
+  // matches for the live query, kept so next/prev don't recompute
+  const matchesRef = useRef<FindMatch[]>([])
+  const activeRef = useRef(-1)
   const onBufferChangeRef = useRef(onBufferChange)
   onBufferChangeRef.current = onBufferChange
   const onSaveRef = useRef(onSave)
@@ -226,7 +347,6 @@ export function CodeEditor({
         keymap.of([
           ...closeBracketsKeymap,
           ...defaultKeymap,
-          ...searchKeymap,
           ...historyKeymap,
           ...foldKeymap,
           ...completionKeymap,
@@ -234,6 +354,7 @@ export function CodeEditor({
           indentWithTab,
         ]),
         saveKeymap,
+        findExtension,
         ...langExts,
         // fixed positioning keeps tooltips (autocomplete, the selection "Add to
         // chat" button) from being clipped by the editor's overflow container
@@ -273,6 +394,75 @@ export function CodeEditor({
       view.dispatch({ changes: { from: 0, to: current.length, insert: buffer } })
     }
   }, [buffer])
+
+  // Register an imperative search controller with the shell's find bar. CodeMirror owns the
+  // highlighting (via findExtension) and scrolling; the shell just drives query/next/prev.
+  useEffect(() => {
+    const register = onRegisterSearchRef.current
+    if (!register) return
+
+    const stateOf = (): SearchState => {
+      const total = matchesRef.current.length
+      return { total, current: total ? activeRef.current + 1 : 0 }
+    }
+
+    const apply = (active: number): SearchState => {
+      const view = viewRef.current
+      const matches = matchesRef.current
+      if (!view || matches.length === 0) return { total: 0, current: 0 }
+      activeRef.current = active
+      const m = matches[active]
+      view.dispatch({
+        selection: { anchor: m.from, head: m.to },
+        effects: [setFind.of({ matches, active }), EditorView.scrollIntoView(m.from, { y: 'center' })],
+      })
+      return stateOf()
+    }
+
+    const controller: SearchController = {
+      setQuery(query: string, opts: SearchOptions): SearchState {
+        const view = viewRef.current
+        if (!view || !query) {
+          matchesRef.current = []
+          activeRef.current = -1
+          view?.dispatch({ effects: setFind.of({ matches: [], active: -1 }) })
+          return { total: 0, current: 0 }
+        }
+        const matches = computeMatches(view, query, opts)
+        if (matches === null) {
+          matchesRef.current = []
+          activeRef.current = -1
+          view.dispatch({ effects: setFind.of({ matches: [], active: -1 }) })
+          return { total: 0, current: 0, invalid: true }
+        }
+        matchesRef.current = matches
+        if (matches.length === 0) {
+          activeRef.current = -1
+          view.dispatch({ effects: setFind.of({ matches: [], active: -1 }) })
+          return { total: 0, current: 0 }
+        }
+        return apply(0)
+      },
+      next(): SearchState {
+        const total = matchesRef.current.length
+        if (total === 0) return { total: 0, current: 0 }
+        return apply((activeRef.current + 1) % total)
+      },
+      prev(): SearchState {
+        const total = matchesRef.current.length
+        if (total === 0) return { total: 0, current: 0 }
+        return apply((activeRef.current - 1 + total) % total)
+      },
+      clear(): void {
+        matchesRef.current = []
+        activeRef.current = -1
+        viewRef.current?.dispatch({ effects: setFind.of({ matches: [], active: -1 }) })
+      },
+    }
+
+    register(controller)
+    return () => register(null)
+  }, [])
 
   return <div ref={containerRef} className="code-editor-cm" />
 }
