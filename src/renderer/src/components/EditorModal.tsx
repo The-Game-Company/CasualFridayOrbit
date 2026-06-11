@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DiffView } from './DiffView'
 import { MergeEditor } from './MergeEditor'
+import { FindBar } from './FindBar'
+import { CodeEditor } from './viewers/CodeEditor'
+import { createGenericSearchController } from './search/genericSearch'
 import { resolveFileType } from '../file-types/index'
 import { MODE_LABELS } from '../file-types/registry'
-import type { ViewMode, SelectionRef } from '../file-types/types'
+import type { ViewMode, SelectionRef, SearchController, SearchOptions, SearchState } from '../file-types/types'
+import { LEAN_EDIT_BYTES, MAX_EDIT_BYTES, formatBytes } from '../../../shared/limits'
 
 /** A selection promoted to an agent reference: the file path plus the selection. */
 export type ChatRef = SelectionRef & { path: string }
@@ -12,7 +16,10 @@ export type ChatRef = SelectionRef & { path: string }
 const SECRET_RE =
   /(password|passwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|connection[_-]?string|authorization|bearer\s|mongodb(\+srv)?:\/\/|redis:\/\/|postgres(ql)?:\/\/|mysql:\/\/|amqp:\/\/)/i
 function hasSecrets(text: string): boolean {
-  return text.split('\n').some((l) => SECRET_RE.test(l))
+  // Regex has no line anchors, so testing the whole string is equivalent to testing each line —
+  // but without allocating a lines array (matters when the buffer is multi-MB) and it
+  // short-circuits at the first match.
+  return SECRET_RE.test(text)
 }
 function maskLine(line: string): string {
   if (!SECRET_RE.test(line)) return line
@@ -74,6 +81,7 @@ export function EditorModal({
   // ── loading state ──────────────────────────────────────────────────────────
   const [load, setLoad] = useState<LoadState>('loading')
   const [binary, setBinary] = useState(false)
+  const [fileSize, setFileSize] = useState(0)
   const [buffer, setBufferState] = useState('')
   const [baseline, setBaselineState] = useState<Baseline | null>(null)
   const [externalDisk, setExternalDisk] = useState<Disk | null>(null)
@@ -100,6 +108,22 @@ export function EditorModal({
     localStorage.setItem('orbit.previewZoom', String(zoom))
   }, [zoom])
   const bodyRef = useRef<HTMLDivElement>(null)
+
+  // ── find / search ───────────────────────────────────────────────────────────
+  const [findOpen, setFindOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [opts, setOpts] = useState<SearchOptions>({ caseSensitive: false, wholeWord: false, regex: false })
+  const [searchState, setSearchState] = useState<SearchState>({ total: 0, current: 0 })
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  // Controller a viewer registers (e.g. CodeMirror). Wins over the generic DOM searcher.
+  const viewerSearchRef = useRef<SearchController | null>(null)
+  // Generic DOM/textarea searcher over the rendered editor body, created once.
+  const genericRef = useRef<SearchController | null>(null)
+  if (!genericRef.current) genericRef.current = createGenericSearchController(() => bodyRef.current)
+  // A registered viewer controller wins; otherwise search the rendered DOM generically.
+  const activeController = (): SearchController => viewerSearchRef.current ?? genericRef.current!
+
   useEffect(() => {
     const el = bodyRef.current
     if (!el) return
@@ -143,10 +167,81 @@ export function EditorModal({
   // ── resolve final entry after we know binary state ─────────────────────────
   const entry = useMemo(() => resolveFileType(path, binary), [path, binary])
 
+  // Big text files bypass the rich viewers (CSV table, markdown preview) and the whole-buffer
+  // secret scan — those are O(n)/O(nodes) and will freeze the renderer. We hand the file
+  // straight to CodeMirror, which is built for multi-MB documents. Viewers that scale on their
+  // own (handlesLarge — e.g. the virtualized JSON tree) keep the full experience. See shared/limits.
+  const lean = load === 'ok' && !binary && fileSize > LEAN_EDIT_BYTES && !entry.handlesLarge
+
   // ── mode management ────────────────────────────────────────────────────────
   const [mode, setMode] = useState<ViewMode>(() => entry.defaultMode?.(path) ?? entry.modes[0])
   useEffect(() => {
     setMode(entry.defaultMode?.(path) ?? entry.modes[0])
+  }, [path])
+
+  // ── find handlers ────────────────────────────────────────────────────────────
+  const onNext = (): void => setSearchState(activeController().next())
+  const onPrev = (): void => setSearchState(activeController().prev())
+  const onToggle = (key: keyof SearchOptions): void => setOpts((o) => ({ ...o, [key]: !o[key] }))
+  const closeFind = (): void => {
+    setFindOpen(false)
+    activeController().clear()
+    setSearchState({ total: 0, current: 0 })
+  }
+
+  // Ctrl+F opens the find bar; F3 / Shift+F3 navigate; Escape closes. Capture-phase so we win
+  // before CodeMirror or other handlers, and gated to the visible+focused editor instance
+  // (multiple editors can be mounted, with inactive ones display:none → offsetParent null).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const root = rootRef.current
+      if (!root || root.offsetParent === null || !root.contains(document.activeElement)) return
+
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (findOpen) {
+          // already open: just refocus + select the input (autoFocus only fires on mount)
+          const input = root.querySelector<HTMLInputElement>('.find-input')
+          input?.focus()
+          input?.select()
+        } else {
+          setFindOpen(true)
+        }
+        return
+      }
+      if (!findOpen) return
+      if (e.key === 'F3') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.shiftKey) onPrev()
+        else onNext()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        closeFind()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen])
+
+  // Re-run the active query whenever it, the options, or the underlying content/viewer change.
+  // The buffer-driven re-run is debounced so typing in the editor doesn't thrash the search.
+  useEffect(() => {
+    if (!findOpen) return
+    const t = setTimeout(() => {
+      setSearchState(activeController().setQuery(query, opts))
+    }, 150)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, opts, findOpen, mode, buffer, load, lean])
+
+  // Closing or switching files clears highlights.
+  useEffect(() => {
+    return () => activeController().clear()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
   // ── notify parent of dirty state ───────────────────────────────────────────
@@ -183,6 +278,7 @@ export function EditorModal({
     let alive = true
     setLoad('loading')
     setBinary(false)
+    setFileSize(0)
     setExternalDisk(null)
     setConflict(false)
     setDeleted(false)
@@ -200,6 +296,7 @@ export function EditorModal({
 
     window.orbit.readTextFile(path).then((r) => {
       if (!alive) return
+      setFileSize(r.size ?? 0)
       if (r.ok) {
         setBuffer(r.content!)
         setBaseline({ content: r.content!, hash: r.hash!, mtimeMs: r.mtimeMs! })
@@ -276,18 +373,30 @@ export function EditorModal({
   // ── secrets ────────────────────────────────────────────────────────────────
   const isCodeFile = entry.id === 'code' || entry.id === 'text'
   const secrets = useMemo(
-    () => !isCodeFile && load === 'ok' && !binary && hasSecrets(buffer),
-    [isCodeFile, load, binary, buffer]
+    () => !lean && !isCodeFile && load === 'ok' && !binary && hasSecrets(buffer),
+    [lean, isCodeFile, load, binary, buffer]
   )
   const redacted = secrets && !revealed
   const maskedView = useMemo(() => (redacted ? maskContent(buffer) : ''), [redacted, buffer])
 
   // ── render ─────────────────────────────────────────────────────────────────
-  const showModes = entry.modes.length > 1
+  const showModes = !lean && entry.modes.length > 1
   const Viewer = entry.Viewer
 
   return (
-    <div className="editor" style={{ '--preview-zoom': zoom } as React.CSSProperties}>
+    <div ref={rootRef} className="editor" style={{ '--preview-zoom': zoom } as React.CSSProperties}>
+      {findOpen && (
+        <FindBar
+          query={query}
+          opts={opts}
+          state={searchState}
+          onQueryChange={setQuery}
+          onToggle={onToggle}
+          onNext={onNext}
+          onPrev={onPrev}
+          onClose={closeFind}
+        />
+      )}
       {(showModes && load === 'ok' && !redacted) || dirty ? (
         <div className="editor-toolbar">
           {showModes && load === 'ok' && !redacted && (
@@ -331,10 +440,16 @@ export function EditorModal({
         <div className="editor-banner warn">🔒 This file is covered by a lease held by <b>{leasedBy}</b> — coordinate before saving.</div>
       )}
       {deleted && <div className="editor-banner danger">⚠ This file was deleted on disk. Saving will recreate it.</div>}
+      {lean && (
+        <div className="editor-banner warn">
+          ⚡ Large file ({formatBytes(fileSize)}) — opened in a lean code editor. The tree/table/preview
+          views and secret-masking are off so it stays responsive.
+        </div>
+      )}
       {externalDisk && !redacted && (
         <div className="editor-banner warn">
           ⚠ This file changed on disk while you were editing.
-          <button onClick={() => setDiffBase(externalDisk.content ?? '')}>View diff</button>
+          {!lean && <button onClick={() => setDiffBase(externalDisk.content ?? '')}>View diff</button>}
           <button onClick={reloadFromDisk}>Reload (lose my changes)</button>
           <button onClick={() => setExternalDisk(null)}>Keep mine</button>
         </div>
@@ -342,7 +457,11 @@ export function EditorModal({
 
       <div className="editor-body" ref={bodyRef}>
         {load === 'loading' && <div className="editor-msg">loading…</div>}
-        {load === 'tooLarge' && <div className="editor-msg">File is larger than 2&nbsp;MB — not editable here.</div>}
+        {load === 'tooLarge' && (
+          <div className="editor-msg">
+            File is {formatBytes(fileSize)} — too large to edit (limit {formatBytes(MAX_EDIT_BYTES)}).
+          </div>
+        )}
         {load === 'missing' && <div className="editor-msg">File not found.</div>}
         {load === 'error' && <div className="editor-msg">Could not read this file.</div>}
         {load === 'binary' && !entry.handlesBinary && (
@@ -351,7 +470,26 @@ export function EditorModal({
 
         {redacted && <pre className="md-preview redacted-view">{maskedView}</pre>}
 
-        {!redacted && !showMerge && (load === 'ok' || (load === 'binary' && entry.handlesBinary)) && (
+        {!redacted && !showMerge && lean && (
+          <CodeEditor
+            path={path}
+            buffer={buffer}
+            binary={binary}
+            dirty={dirty}
+            onBufferChange={setBuffer}
+            mode="edit"
+            onModeChange={() => {}}
+            busy={busy}
+            leasedBy={leasedBy}
+            onSave={() => save(false)}
+            onAddSelectionToChat={onAddToChat ? (sel) => onAddToChat({ path, ...sel }) : undefined}
+            onRegisterSearch={(c) => {
+              viewerSearchRef.current = c
+            }}
+          />
+        )}
+
+        {!redacted && !showMerge && !lean && (load === 'ok' || (load === 'binary' && entry.handlesBinary)) && (
           <Viewer
             path={path}
             buffer={buffer}
@@ -364,6 +502,9 @@ export function EditorModal({
             leasedBy={leasedBy}
             onSave={() => save(false)}
             onAddSelectionToChat={onAddToChat ? (sel) => onAddToChat({ path, ...sel }) : undefined}
+            onRegisterSearch={(c) => {
+              viewerSearchRef.current = c
+            }}
           />
         )}
 
@@ -395,8 +536,8 @@ export function EditorModal({
             <div className="conflict-title">File changed on disk</div>
             <p>This file was saved externally while you had unsaved changes. How do you want to resolve it?</p>
             <div className="conflict-actions">
-              <button onClick={() => { setConflict(false); setShowMerge(true) }}>Merge line by line</button>
-              <button onClick={() => setDiffBase(conflictDisk)}>View diff</button>
+              {!lean && <button onClick={() => { setConflict(false); setShowMerge(true) }}>Merge line by line</button>}
+              {!lean && <button onClick={() => setDiffBase(conflictDisk)}>View diff</button>}
               <button className="danger" onClick={() => save(true)}>Override with mine</button>
               <button onClick={() => { reloadFromDisk(); setConflict(false) }}>Discard mine, use disk</button>
               <button onClick={() => setConflict(false)}>Cancel</button>

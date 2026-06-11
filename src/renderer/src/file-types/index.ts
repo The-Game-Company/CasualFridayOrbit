@@ -54,13 +54,17 @@ registerFileType({
 })
 
 // ── JSON tree viewer ──────────────────────────────────────────────────────────
+// 'raw' is intentionally dropped: the 'edit' mode (CodeMirror) shows the exact bytes too,
+// but with highlighting/folding/lint and no large-file textarea lag. handlesLarge: the tree
+// is virtualized, so big JSON keeps the full experience instead of the lean fallback.
 registerFileType({
   id: 'json',
   score: (p, binary) => (!binary && ['json', 'jsonc'].includes(ext(p)) ? 90 : 0),
-  modes: ['tree', 'edit', 'raw'],
+  modes: ['tree', 'edit'],
   defaultMode: () => 'tree',
   Viewer: JsonTreeViewer,
   editable: true,
+  handlesLarge: true,
 })
 
 // ── JSONL / newline-delimited JSON ───────────────────────────────────────────
