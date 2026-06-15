@@ -34,6 +34,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
     items: [
       [['Ctrl', ','], 'Settings'],
       [['Ctrl', 'H'], 'History'],
+      [['Ctrl', '+/−'], 'Zoom the whole UI in / out (Ctrl+0 resets to 100%)'],
       [['Ctrl', '/'], 'This shortcuts list']
     ]
   }

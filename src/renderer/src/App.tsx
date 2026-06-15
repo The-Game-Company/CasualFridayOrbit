@@ -1306,6 +1306,7 @@ export default function App(): JSX.Element {
   //   • Ctrl+(Shift+)Tab next/previous tab of the active project (cycles)
   //   • Ctrl+1..9        focus the Nth tab of the active project (by position)
   //   • Ctrl+Shift+↑/↓   move to the previous/next project (and focus/open it)
+  //   • Ctrl+= / Ctrl+-  zoom the whole UI in/out; Ctrl+0 resets to 100%
   useEffect(() => {
     // Capture phase: xterm consumes Ctrl+key combos (sends them to the PTY) before they reach
     // a bubble-phase window listener, so we must intercept here and stop propagation when we act.
@@ -1315,6 +1316,25 @@ export default function App(): JSX.Element {
       const grab = (): void => {
         e.preventDefault()
         e.stopPropagation()
+      }
+
+      // Ctrl+= / Ctrl+- → zoom the whole UI in/out (same knob as the Settings "Global UI
+      // size" slider); Ctrl+0 → reset to 100%. Bounds mirror the slider (80%–200%), stepping
+      // 10% per press. We read/write via configRef + saveConfig so the change persists and the
+      // uiScale effect re-applies the zoom. Always swallow the key so it never reaches xterm.
+      const isZoomIn = e.code === 'Equal' || e.code === 'NumpadAdd' || e.key === '+' || e.key === '='
+      const isZoomOut = e.code === 'Minus' || e.code === 'NumpadSubtract' || e.key === '-'
+      const isZoomReset = e.code === 'Digit0' || e.code === 'Numpad0' || e.key === '0'
+      if (isZoomIn || isZoomOut || isZoomReset) {
+        const cfg = configRef.current
+        if (!cfg) return
+        grab()
+        const cur = cfg.uiScale || 1
+        const next = isZoomReset
+          ? 1
+          : Math.min(2, Math.max(0.8, Math.round((cur + (isZoomIn ? 0.1 : -0.1)) * 100) / 100))
+        if (next !== cur) saveConfig({ ...cfg, uiScale: next })
+        return
       }
 
       if (!e.shiftKey && (e.code === 'Backslash' || e.key === '\\')) {
