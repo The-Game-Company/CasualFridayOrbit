@@ -682,6 +682,7 @@ export default function App(): JSX.Element {
           setSessions(
             keep.map((p) => ({
               ...initSession(p.id, p.projectPath, p.projectName, p.kind, p.title, p.resumeId, undefined, p.branchedFrom),
+              effort: p.effort ?? null,
               lastPrompt: p.lastPrompt ?? '',
               recentFiles: p.recentFiles ?? []
             }))
@@ -786,6 +787,7 @@ export default function App(): JSX.Element {
         title: s.title,
         resumeId: s.resumeId,
         branchedFrom: s.branchedFrom,
+        effort: s.effort ?? undefined,
         lastPrompt: s.lastPrompt ? s.lastPrompt.slice(0, 500) : undefined,
         recentFiles: s.recentFiles.length ? s.recentFiles : undefined
       })),
@@ -1039,6 +1041,8 @@ export default function App(): JSX.Element {
       titleOverride?: string
       /** marks the new window as a fork of another chat (title of the source at fork time) */
       branchedFrom?: string
+      /** pin the new window's reasoning effort (CLAUDE_EFFORT) — e.g. a branch inherits its source's */
+      effort?: string
     }
   ): void {
     const id = uid()
@@ -1049,7 +1053,10 @@ export default function App(): JSX.Element {
       (kind === 'claude' ? `${name} #${count + 1}` : `${KIND_META[kind].label} #${count + 1}`)
     setSessions((prev) => [
       ...prev,
-      initSession(id, projectPath, name, kind, label, opts?.resumeId, opts?.startupCommand, opts?.branchedFrom)
+      {
+        ...initSession(id, projectPath, name, kind, label, opts?.resumeId, opts?.startupCommand, opts?.branchedFrom),
+        effort: opts?.effort ?? null
+      }
     ])
     setActiveProject(projectPath)
 
@@ -1096,7 +1103,9 @@ export default function App(): JSX.Element {
       // seed with the source's title so it reads sensibly before claude re-derives one on the fork;
       // the ⎇ badge (branchedFrom) keeps the two distinguishable while their titles still match
       titleOverride: src.title,
-      branchedFrom: src.title
+      branchedFrom: src.title,
+      // a branch continues at the same reasoning effort as the chat it forked from
+      effort: src.effort ?? undefined
     })
   }
 
@@ -1947,6 +1956,7 @@ export default function App(): JSX.Element {
                       projectPath={s.projectPath}
                       kind={s.kind}
                       resumeId={s.resumeId}
+                      effort={s.effort}
                       startupCommand={s.startupCommand}
                       live={started.has(s.id)}
                       active={s.id === activeId}
