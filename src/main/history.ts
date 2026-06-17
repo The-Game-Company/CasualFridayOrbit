@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { HistoryEntry } from '../shared/events'
 
 /**
@@ -99,4 +100,48 @@ export function listHistory(cwd: string, limit = 50): HistoryEntry[] {
   }
   entries.sort((a, b) => b.updatedAt - a.updatedAt)
   return entries.slice(0, limit)
+}
+
+/**
+ * Fork ("branch") a claude conversation: copy its transcript to a brand-new session id so the
+ * two diverge independently from the same shared history. A chat's whole context IS this `.jsonl`
+ * file, so a copy under a new id, resumed in its own process, is a genuine second conversation —
+ * resumable from History, never fighting the original over one file.
+ *
+ * Every line's `sessionId` is rewritten to the new id so the fork is byte-for-byte indistinguishable
+ * from a natively-created transcript (claude keys some lines by it, and `--resume` matches the file
+ * name). The message tree (`uuid`/`parentUuid`) is preserved verbatim — the two files are never
+ * loaded together, so the shared uuids can't collide. Unparseable lines (a partial last line claude
+ * was mid-write on) are dropped so the fork is always clean. Returns the new id, or null if the
+ * source transcript is missing/empty or the copy failed.
+ */
+export function duplicateTranscript(cwd: string, sourceSessionId: string): string | null {
+  const dir = projectTranscriptDir(cwd)
+  let raw: string
+  try {
+    raw = fs.readFileSync(path.join(dir, `${sourceSessionId}.jsonl`), 'utf8')
+  } catch {
+    return null
+  }
+  const newId = randomUUID()
+  const out: string[] = []
+  for (const line of raw.split('\n')) {
+    const s = line.trim()
+    if (!s) continue
+    let o: any
+    try {
+      o = JSON.parse(s)
+    } catch {
+      continue // drop a partial/garbage line rather than copy invalid JSON into the fork
+    }
+    if (typeof o.sessionId === 'string') o.sessionId = newId
+    out.push(JSON.stringify(o))
+  }
+  if (!out.length) return null
+  try {
+    fs.writeFileSync(path.join(dir, `${newId}.jsonl`), out.join('\n') + '\n', 'utf8')
+  } catch {
+    return null
+  }
+  return newId
 }
