@@ -10,6 +10,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
     items: [
       [['Ctrl', 'T'], 'New tab in the active project'],
       [['Ctrl', '\\'], 'Split — new Claude window in the active tab'],
+      [['Ctrl', 'Shift', 'D'], 'Branch the active chat — fork it into a split that shares its history'],
       [['Ctrl', 'W'], 'Close the active window (and its tab if it was the last window)'],
       [['Ctrl', 'Shift', 'W'], 'Reopen the last closed window where it was (undo-close)'],
       [['Ctrl', 'Tab'], 'Next tab of the active project (Shift reverses)'],

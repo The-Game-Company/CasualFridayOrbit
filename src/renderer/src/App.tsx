@@ -315,6 +315,7 @@ interface ClosedWindow {
     kind: TermKind
     title: string
     resumeId?: string
+    branchedFrom?: string
     startupCommand?: string
     lastPrompt: string
   }
@@ -680,7 +681,7 @@ export default function App(): JSX.Element {
           const keptIds = new Set(keep.map((s) => s.id))
           setSessions(
             keep.map((p) => ({
-              ...initSession(p.id, p.projectPath, p.projectName, p.kind, p.title, p.resumeId),
+              ...initSession(p.id, p.projectPath, p.projectName, p.kind, p.title, p.resumeId, undefined, p.branchedFrom),
               lastPrompt: p.lastPrompt ?? '',
               recentFiles: p.recentFiles ?? []
             }))
@@ -784,6 +785,7 @@ export default function App(): JSX.Element {
         kind: s.kind,
         title: s.title,
         resumeId: s.resumeId,
+        branchedFrom: s.branchedFrom,
         lastPrompt: s.lastPrompt ? s.lastPrompt.slice(0, 500) : undefined,
         recentFiles: s.recentFiles.length ? s.recentFiles : undefined
       })),
@@ -1035,6 +1037,8 @@ export default function App(): JSX.Element {
       resumeId?: string
       startupCommand?: string
       titleOverride?: string
+      /** marks the new window as a fork of another chat (title of the source at fork time) */
+      branchedFrom?: string
     }
   ): void {
     const id = uid()
@@ -1045,7 +1049,7 @@ export default function App(): JSX.Element {
       (kind === 'claude' ? `${name} #${count + 1}` : `${KIND_META[kind].label} #${count + 1}`)
     setSessions((prev) => [
       ...prev,
-      initSession(id, projectPath, name, kind, label, opts?.resumeId, opts?.startupCommand)
+      initSession(id, projectPath, name, kind, label, opts?.resumeId, opts?.startupCommand, opts?.branchedFrom)
     ])
     setActiveProject(projectPath)
 
@@ -1070,6 +1074,30 @@ export default function App(): JSX.Element {
       setTabs((prev) => [...prev, { id: tabId, projectPath, columns: [[id]], activeWindow: id }])
       setActiveTabId(tabId)
     }
+  }
+
+  /**
+   * Branch ("duplicate") a chat: fork its transcript on disk into a fresh session id (main copies
+   * the .jsonl, rewriting the session id), then open that fork as a split window beside the source
+   * within the same tab. Both windows are now independent, resumable conversations sharing history
+   * up to this moment — diverge in either without touching the other. No-op for non-claude windows
+   * or a chat that hasn't sent a message yet (no transcript to fork → no resumeId).
+   */
+  async function branchChat(windowId: string): Promise<void> {
+    const src = sessionsRef.current.find((s) => s.id === windowId)
+    if (!src || src.kind !== 'claude' || !src.resumeId) return
+    const targetTabId = tabs.find((t) => tabWindows(t).includes(windowId))?.id
+    const newId = await window.orbit.duplicateSession(src.projectPath, src.resumeId)
+    if (!newId) return
+    createSession(src.projectPath, 'claude', {
+      split: true,
+      targetTabId,
+      resumeId: newId,
+      // seed with the source's title so it reads sensibly before claude re-derives one on the fork;
+      // the ⎇ badge (branchedFrom) keeps the two distinguishable while their titles still match
+      titleOverride: src.title,
+      branchedFrom: src.title
+    })
   }
 
   function runCommand(cmd: OrbitCommand): void {
@@ -1187,6 +1215,7 @@ export default function App(): JSX.Element {
         kind: sess.kind,
         title: sess.title,
         resumeId: sess.resumeId,
+        branchedFrom: sess.branchedFrom,
         startupCommand: sess.startupCommand,
         lastPrompt: sess.lastPrompt
       },
@@ -1222,7 +1251,7 @@ export default function App(): JSX.Element {
     setSessions((prev) => [
       ...prev,
       {
-        ...initSession(id, s.projectPath, s.projectName, s.kind, s.title, resumeId, s.startupCommand),
+        ...initSession(id, s.projectPath, s.projectName, s.kind, s.title, resumeId, s.startupCommand, s.branchedFrom),
         lastPrompt: resumeId ? s.lastPrompt : ''
       }
     ])
@@ -1356,6 +1385,17 @@ export default function App(): JSX.Element {
         const cur = projTabs.findIndex((t) => t.id === activeTabId)
         const step = e.shiftKey ? -1 : 1
         focusTab(projTabs[(Math.max(cur, 0) + step + projTabs.length) % projTabs.length].id)
+        return
+      }
+
+      // Ctrl+Shift+D → branch (duplicate) the active chat: fork its transcript into a split window
+      // that shares history up to now. Only acts on a claude chat that has a transcript to fork.
+      if (e.shiftKey && e.key.toLowerCase() === 'd') {
+        const src = sessions.find((s) => s.id === activeId)
+        if (src && src.kind === 'claude' && src.resumeId) {
+          grab()
+          void branchChat(src.id)
+        }
         return
       }
 
@@ -1881,6 +1921,7 @@ export default function App(): JSX.Element {
                     session={s}
                     active={s.id === activeId}
                     canRemove={visibleEffective.length > 1}
+                    canBranch={s.kind === 'claude' && !!s.resumeId}
                     autoFocused={s.id === autoFocused}
                     draggable={visibleEffective.length > 1 || projectTabs.length > 1}
                     onDragStart={(e) => {
@@ -1894,6 +1935,7 @@ export default function App(): JSX.Element {
                     }}
                     onFocus={() => focusWindow(s.id)}
                     onSplit={() => createSession(s.projectPath, 'claude', { split: true })}
+                    onBranch={() => void branchChat(s.id)}
                     onRemove={() => closeWindow(s.id)}
                   >
                     <Terminal
@@ -2127,6 +2169,21 @@ export default function App(): JSX.Element {
             >
               Split — new Claude window
             </div>
+            {(() => {
+              const head = sessions.find((s) => s.id === menuTab.activeWindow)
+              if (!head || head.kind !== 'claude' || !head.resumeId) return null
+              return (
+                <div
+                  className="dropdown-item"
+                  onClick={() => {
+                    void branchChat(head.id)
+                    setTabMenu(null)
+                  }}
+                >
+                  Branch chat — fork with shared history
+                </div>
+              )
+            })()}
             <div
               className="dropdown-item danger"
               onClick={() => {

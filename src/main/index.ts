@@ -10,7 +10,7 @@ import { ProjectsWatcher } from './projects-watch'
 import { listSkills } from './skills'
 import { listMcpServers, restartMcpServer } from './mcp'
 import { loadConfig, saveConfig } from './config'
-import { listHistory } from './history'
+import { listHistory, duplicateTranscript } from './history'
 import { loadWorkspace, saveWorkspace, loadWindowState, saveWindowState } from './workspace'
 import { checkUpdate, runUpdate, closeExternalClaude } from './updater'
 import { readDir, readTextFile, saveTextFile, searchFiles, FileWatcher } from './files'
@@ -580,6 +580,13 @@ function registerIpc(): void {
     sessions?.create(args)
     return true
   })
+  // Fork a claude conversation's transcript to a new id (see duplicateTranscript). Returns the
+  // new session id the renderer then opens with --resume, or null if there was nothing to fork.
+  ipcMain.handle(
+    IPC.SessionDuplicate,
+    (_e, arg: { projectPath: string; sourceSessionId: string }): string | null =>
+      duplicateTranscript(arg.projectPath, arg.sourceSessionId)
+  )
   ipcMain.handle(IPC.SessionClose, (_e, sessionId: string) => {
     sessions?.close(sessionId)
     return true
