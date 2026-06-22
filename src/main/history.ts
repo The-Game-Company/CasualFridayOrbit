@@ -7,10 +7,14 @@ import type { HistoryEntry } from '../shared/events'
 /**
  * Claude stores per-project transcripts at
  *   ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
- * where the cwd is encoded by replacing ':' '\' '/' with '-'.
+ * where the cwd is encoded by replacing every non-alphanumeric char with '-'
+ * (so ':' '\' '/' AND spaces, dots, underscores all collapse to '-'). The old
+ * narrower `[:\\/]` regex left spaces intact, so any project path with a space
+ * (e.g. "Casual Friday") pointed at a directory that doesn't exist — breaking
+ * History and branch/duplicate (Ctrl+Shift+D) for that project.
  */
 export function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/[:\\/]/g, '-')
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-')
 }
 
 function projectTranscriptDir(cwd: string): string {
