@@ -39,6 +39,8 @@ interface Props {
   kind: TermKind
   /** if set, the first launch resumes this past claude session id */
   resumeId?: string
+  /** reasoning effort to pin for this chat (CLAUDE_EFFORT) — keeps it independent of siblings */
+  effort?: string | null
   /** command typed once at spawn (command-bar sessions) */
   startupCommand?: string
   /** when true, the backend process is spawned (lazy-resume: stays unspawned until shown) */
@@ -75,6 +77,9 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   // read inside the stable evalPin callback, so it always sees the current prompt text
   const lastPromptRef = useRef(props.lastPrompt)
   lastPromptRef.current = props.lastPrompt
+  // read at spawn time, so a lazy launch picks up the effort restored/known by the time it fires
+  const effortRef = useRef(props.effort)
+  effortRef.current = props.effort
 
   // Decide which prompt the pinned bar should show.
   //  • With markers (prompts submitted during this live session) we know each prompt's line, so
@@ -162,7 +167,8 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
       continueLast,
       resumeId,
       startupCommand: props.startupCommand,
-      appearance: THEMES[props.theme].appearance
+      appearance: THEMES[props.theme].appearance,
+      effort: effortRef.current ?? undefined
     })
     term.focus()
   }

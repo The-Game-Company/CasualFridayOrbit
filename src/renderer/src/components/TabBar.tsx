@@ -114,6 +114,9 @@ export function TabBar({
             <span className="tab-kind">{paused ? '⏸' : KIND_META[head.kind].icon}</span>
             <StatusDot status={status} />
             <span className="tab-title">{head.title}</span>
+            {head.branchedFrom && (
+              <span className="tab-branch" title={`branched from: ${head.branchedFrom}`}>⎇</span>
+            )}
             {skill && <span className="tab-skill" title={`running skill: ${skill}`}>✦</span>}
             {count > 1 && <span className="tab-count" title={`${count} windows`}>⊞{count}</span>}
             <AgentBadge n={agents} />

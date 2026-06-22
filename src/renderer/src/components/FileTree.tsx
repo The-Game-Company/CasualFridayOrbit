@@ -140,18 +140,20 @@ interface SearchNodeProps {
 }
 
 function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile }: SearchNodeProps): JSX.Element {
+  const [open, setOpen] = useState(true)
   const pad = { paddingLeft: 8 + depth * 12 }
 
   if (node.type === 'dir') {
     return (
       <>
-        <div className="ctx-row dir" style={pad}>
-          <span className="ctx-caret">▾</span>
+        <div className="ctx-row dir" style={pad} onClick={() => setOpen((v) => !v)}>
+          <span className="ctx-caret">{open ? '▾' : '▸'}</span>
           {node.name}
         </div>
-        {node.children.map((c) => (
-          <SearchNode key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} />
-        ))}
+        {open &&
+          node.children.map((c) => (
+            <SearchNode key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} />
+          ))}
       </>
     )
   }

@@ -265,6 +265,10 @@ export interface CreateSessionArgs {
   startupCommand?: string
   /** UI appearance, so claude's TUI theme matches Orbit's (light diffs in light mode) */
   appearance?: 'dark' | 'light'
+  /** pin this session's reasoning effort via CLAUDE_EFFORT (claude only). Set on resume/restore
+   *  so each chat keeps its own effort instead of inheriting the shared global settings default
+   *  another window's /effort last rewrote. Omit on a fresh chat (let claude use its global default). */
+  effort?: string
 }
 
 /** Result of checking whether the installed Claude Code can be upgraded. */
@@ -314,6 +318,12 @@ export interface PersistedSession {
   title: string
   /** real claude session id, captured from hooks; used to --resume on next boot */
   resumeId?: string
+  /** set when this chat was forked from another via "branch chat" — holds the source's
+   *  title at fork time (drives the ⎇ badge + tooltip; survives a restart) */
+  branchedFrom?: string
+  /** last reasoning effort observed for this chat, re-pinned via CLAUDE_EFFORT on the next
+   *  launch so it survives a restart independently of every other window */
+  effort?: string
   /** most recent user prompt, so the pinned-prompt bar can show it after a restore */
   lastPrompt?: string
   /** recently touched files (most recent first), so the recents panel survives a restart */
@@ -403,6 +413,7 @@ export const IPC = {
   NotifyActiveSession: 'notify:activeSession',
   // session control
   SessionCreate: 'session:create',
+  SessionDuplicate: 'session:duplicate',
   SessionClose: 'session:close',
   SessionInput: 'session:input',
   SessionResize: 'session:resize',

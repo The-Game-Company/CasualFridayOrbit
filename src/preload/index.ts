@@ -131,6 +131,9 @@ const api = {
   // session control
   createSession: (args: CreateSessionArgs): Promise<boolean> =>
     ipcRenderer.invoke(IPC.SessionCreate, args),
+  /** Fork a claude chat's transcript → returns the new session id to --resume, or null. */
+  duplicateSession: (projectPath: string, sourceSessionId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.SessionDuplicate, { projectPath, sourceSessionId }),
   closeSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.SessionClose, sessionId),
   sessionInput: (sessionId: string, data: string): void =>

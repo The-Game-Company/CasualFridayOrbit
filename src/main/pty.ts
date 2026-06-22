@@ -96,6 +96,8 @@ export interface PtyOptions {
   resumeId?: string
   startupCommand?: string
   appearance?: 'dark' | 'light'
+  /** pin reasoning effort via CLAUDE_EFFORT (claude only); see CreateSessionArgs.effort */
+  effort?: string
   onData: (data: string) => void
   onExit: (code: number) => void
 }
@@ -146,6 +148,11 @@ export class PtySession {
       env.ORBIT_HOOK_PORT = String(opts.hookPort)
       env.ORBIT_HOOK_TOKEN = opts.hookToken
       env.ORBIT_SESSION_ID = opts.sessionId
+      // Pin this chat's reasoning effort. claude reads CLAUDE_EFFORT from its env (it overrides the
+      // global settings.json default — which a /effort in any other window rewrites), so this keeps
+      // each resumed chat at its own effort instead of all of them inheriting the last global value.
+      // Also makes claude export CLAUDE_EFFORT to the hook forwarder, so the live badge is exact.
+      if (opts.effort) env.CLAUDE_EFFORT = opts.effort
     } else {
       ;({ file, args } = resolveShell(opts.kind))
     }

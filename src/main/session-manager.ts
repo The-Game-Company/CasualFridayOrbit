@@ -38,6 +38,7 @@ export class SessionManager {
       resumeId: args.resumeId,
       startupCommand: args.startupCommand,
       appearance: args.appearance,
+      effort: args.effort,
       onData: (d) => this.cb.onData(args.sessionId, d),
       onExit: (c) => this.cb.onExit(args.sessionId, c)
     })
