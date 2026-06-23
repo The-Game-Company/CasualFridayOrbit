@@ -2,12 +2,15 @@ import type { DragEvent, ReactNode } from 'react'
 import type { SessionState } from '../session-model'
 import { KIND_META } from '../kind-meta'
 import { AgentBadge, StatusDot } from './indicators'
+import { BranchIcon } from './icons'
 
 interface Props {
   session: SessionState
   active: boolean
   /** false when this is the tab's only window (closing it would close the tab) */
   canRemove: boolean
+  /** true for a claude chat with a transcript to fork (hides branch on shells / empty chats) */
+  canBranch: boolean
   /** highlight: auto-focus just jumped here; clears once the user interacts */
   autoFocused: boolean
   /** the header is a drag handle for rearranging the window in the grid */
@@ -16,12 +19,13 @@ interface Props {
   onDragEnd: () => void
   onFocus: () => void
   onSplit: () => void
+  onBranch: () => void
   onRemove: () => void
   children: ReactNode
 }
 
 /** A single window in a tab: a header bar + the terminal underneath. */
-export function Pane({ session, active, canRemove, autoFocused, draggable, onDragStart, onDragEnd, onFocus, onSplit, onRemove, children }: Props): JSX.Element {
+export function Pane({ session, active, canRemove, canBranch, autoFocused, draggable, onDragStart, onDragEnd, onFocus, onSplit, onBranch, onRemove, children }: Props): JSX.Element {
   return (
     <div
       className={`pane ${active ? 'active' : ''} ${session.activeSkill ? 'skill' : ''} ${autoFocused ? 'auto-focused' : ''}`}
@@ -38,6 +42,11 @@ export function Pane({ session, active, canRemove, autoFocused, draggable, onDra
         <span className="pane-kind">{KIND_META[session.kind].icon}</span>
         <StatusDot status={session.status} />
         <span className="pane-title">{session.title}</span>
+        {session.branchedFrom && (
+          <span className="pane-branch-tag" title={`branched from: ${session.branchedFrom}`}>
+            <BranchIcon size={11} /> branch
+          </span>
+        )}
         {session.kind === 'claude' && (
           <span
             className={`pane-effort effort-${(session.effort ?? 'unknown').toLowerCase()}`}
@@ -56,9 +65,21 @@ export function Pane({ session, active, canRemove, autoFocused, draggable, onDra
         )}
         <AgentBadge n={session.agentsActive} />
         <span className="pane-spacer" />
+        {canBranch && (
+          <button
+            className="pane-btn"
+            title="Branch (Ctrl+Shift+D) — fork this chat into a split window that shares its history up to now"
+            onClick={(e) => {
+              e.stopPropagation()
+              onBranch()
+            }}
+          >
+            <BranchIcon />
+          </button>
+        )}
         <button
           className="pane-btn"
-          title="Split — new Claude window in this tab"
+          title="Split (Ctrl+\) — new Claude window in this tab"
           onClick={(e) => {
             e.stopPropagation()
             onSplit()

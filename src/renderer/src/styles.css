@@ -1468,6 +1468,26 @@ body {
   font-size: 11px;
   animation: pulse 1.3s ease-in-out infinite;
 }
+/* "branch chat" markers: a labelled pill in the pane header + a glyph on the owning tab, so a
+   fork stays recognisable even while it still shares the source's title. */
+.pane-branch-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-radius: 6px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.tab-branch {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+}
 
 .right-top {
   flex: 1 1 45%;

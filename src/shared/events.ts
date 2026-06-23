@@ -314,6 +314,9 @@ export interface PersistedSession {
   title: string
   /** real claude session id, captured from hooks; used to --resume on next boot */
   resumeId?: string
+  /** set when this chat was forked from another via "branch chat" — holds the source's
+   *  title at fork time (drives the ⎇ badge + tooltip; survives a restart) */
+  branchedFrom?: string
   /** most recent user prompt, so the pinned-prompt bar can show it after a restore */
   lastPrompt?: string
   /** recently touched files (most recent first), so the recents panel survives a restart */
@@ -403,6 +406,7 @@ export const IPC = {
   NotifyActiveSession: 'notify:activeSession',
   // session control
   SessionCreate: 'session:create',
+  SessionDuplicate: 'session:duplicate',
   SessionClose: 'session:close',
   SessionInput: 'session:input',
   SessionResize: 'session:resize',

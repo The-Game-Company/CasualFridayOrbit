@@ -82,6 +82,9 @@ export interface SessionState {
   title: string
   /** real claude session id (from hooks), used to --resume across restarts */
   resumeId?: string
+  /** set when this chat was forked from another via "branch chat": the source's title at fork
+   *  time. Drives the ⎇ branch badge so a fork stays distinguishable even before its title diverges. */
+  branchedFrom?: string
   /** command typed once at spawn (command-bar sessions) */
   startupCommand?: string
   status: SessionStatus
@@ -127,7 +130,8 @@ export function initSession(
   kind: TermKind,
   title: string,
   resumeId?: string,
-  startupCommand?: string
+  startupCommand?: string,
+  branchedFrom?: string
 ): SessionState {
   return {
     id,
@@ -136,6 +140,7 @@ export function initSession(
     kind,
     title,
     resumeId,
+    branchedFrom,
     startupCommand,
     status: 'idle',
     agentsActive: 0,
