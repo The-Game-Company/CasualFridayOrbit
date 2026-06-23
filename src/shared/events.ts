@@ -242,6 +242,82 @@ export interface AppConfig {
   recentsPerProject?: boolean
   /** remember and restore open editor tabs separately per project */
   openFilesPerProject?: boolean
+  /** master switch for the "delegate a turn to a non-Claude model" feature. Off = the per-chat
+   *  model dropdown is hidden and the feature is entirely inert. */
+  delegateEnabled?: boolean
+  /** chosen model id per delegate provider (non-secret). The API keys live encrypted, separately. */
+  delegateModels?: Partial<Record<DelegateProvider, string>>
+}
+
+/** A non-Claude provider a chat turn can be delegated to. */
+export type DelegateProvider = 'openai' | 'gemini' | 'composer'
+
+/** Which providers currently have an API key stored (booleans). */
+export type DelegateAvailability = Record<DelegateProvider, boolean>
+
+/** Per-provider readiness, richer than a boolean so Settings can explain a not-ready state
+ *  (e.g. a key is stored but the Cursor CLI that Composer needs isn't installed). */
+export interface DelegateProviderStatus {
+  /** an API key is stored for this provider */
+  hasKey: boolean
+  /** usable in the per-chat dropdown right now (key + working client + any external deps) */
+  ready: boolean
+  /** why it's not ready despite a key (shown in Settings), if applicable */
+  note?: string
+}
+
+export type DelegateStatuses = Record<DelegateProvider, DelegateProviderStatus>
+
+/** A selectable delegate model surfaced in the per-chat dropdown. */
+export interface DelegateModelInfo {
+  provider: DelegateProvider
+  /** provider model id, e.g. "gpt-5" / "gemini-2.5-pro" */
+  model: string
+  /** human label shown in the dropdown */
+  label: string
+}
+
+/** Arguments for streaming a delegated turn through a non-Claude model. */
+export interface DelegateSendArgs {
+  /** unique id for this turn — tags streamed tokens + completion/error events */
+  turnId: string
+  /** the Orbit session (window) id this turn belongs to */
+  sessionId: string
+  /** project cwd — locates the transcript dir */
+  cwd: string
+  /** the claude session id whose transcript supplies context + receives the forged turn; omit/empty
+   *  for a brand-new chat with no transcript yet (start-of-chat delegation) */
+  resumeId?: string
+  provider: DelegateProvider
+  /** provider model id to call */
+  model: string
+  /** the user's prompt to send to the external model */
+  prompt: string
+}
+
+/** A streamed token chunk from a delegated turn. */
+export interface DelegateToken {
+  turnId: string
+  sessionId: string
+  chunk: string
+}
+
+/** Terminal event for a delegated turn that finished successfully. */
+export interface DelegateDone {
+  turnId: string
+  sessionId: string
+  /** the full answer text (for the collapsed chip / feed item) */
+  text: string
+  /** set only when a fresh transcript was created (start-of-chat delegation) — the renderer adopts
+   *  it as the session's resumeId so the next claude launch resumes this conversation */
+  newResumeId?: string
+}
+
+/** Terminal event for a delegated turn that failed (nothing was written to the transcript). */
+export interface DelegateError {
+  turnId: string
+  sessionId: string
+  message: string
 }
 
 /** Plain (non-claude) shells Orbit can host. Windows: powershell/cmd; macOS/Linux: zsh/bash. */
@@ -376,6 +452,12 @@ export const IPC = {
   McpRestart: 'mcp:restart',
   ConfigGet: 'config:get',
   ConfigSet: 'config:set',
+  // delegate (non-Claude model) feature
+  DelegateProviders: 'delegate:providers',
+  DelegateSetKey: 'delegate:setKey',
+  DelegateClearKey: 'delegate:clearKey',
+  DelegateSend: 'delegate:send',
+  DelegateCancel: 'delegate:cancel',
   PickFolder: 'dialog:pickFolder',
   ContextRead: 'context:read',
   HistoryList: 'history:list',
@@ -404,6 +486,7 @@ export const IPC = {
   LogUnwatch: 'log:unwatch',
   LogUpdate: 'log:update',
   OpenInExplorer: 'shell:openInExplorer',
+  OpenExternal: 'shell:openExternal',
   // window chrome (single-bar mode: tab bar acts as the titlebar)
   MenuPopup: 'menu:popup',
   TitleBarTheme: 'titlebar:theme',
@@ -424,5 +507,9 @@ export const IPC = {
   HookEvent: 'hook:event',
   ContextTree: 'context:tree',
   ProjectsChanged: 'project:changed',
-  UpdateProgress: 'update:progress'
+  UpdateProgress: 'update:progress',
+  // delegate streaming (main -> renderer)
+  DelegateToken: 'delegate:token',
+  DelegateDone: 'delegate:done',
+  DelegateError: 'delegate:error'
 } as const

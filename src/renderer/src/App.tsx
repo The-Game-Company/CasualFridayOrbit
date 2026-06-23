@@ -3,6 +3,9 @@ import type {
   AppConfig,
   OrbitCommand,
   CoordState,
+  DelegateModelInfo,
+  DelegateProvider,
+  DelegateStatuses,
   HistoryEntry,
   HookEvent,
   KeyDoc,
@@ -20,6 +23,7 @@ import { applyTheme, readableOn, THEMES } from './themes'
 import { Terminal, type TermHandle } from './components/Terminal'
 import { TabBar } from './components/TabBar'
 import { Pane } from './components/Pane'
+import { DelegateBar } from './components/DelegateBar'
 import { Projects } from './components/Projects'
 import { SkillsPanel } from './components/SkillsPanel'
 import { McpPanel } from './components/McpPanel'
@@ -393,6 +397,8 @@ export default function App(): JSX.Element {
   // ordered queue of background windows that have finished and want attention (oldest first);
   // auto-focus drains it one at a time as the user hands off the window they're on
   const [finishedQueue, setFinishedQueue] = useState<string[]>([])
+  // per-provider delegate readiness (key + client + deps) — drives the per-chat dropdown
+  const [delegateAvail, setDelegateAvail] = useState<DelegateStatuses | null>(null)
 
   const handles = useRef<Map<string, TermHandle>>(new Map())
   // stack of recently closed windows for Ctrl+Shift+W (undo-close); newest on top
@@ -607,6 +613,64 @@ export default function App(): JSX.Element {
   const updateSession = useCallback((id: string, fn: (s: SessionState) => SessionState) => {
     setSessions((prev) => prev.map((s) => (s.id === id ? fn(s) : s)))
   }, [])
+
+  // Refresh which delegate providers are usable on launch and whenever Settings closes (a key may
+  // have just been added/cleared). Cheap booleans-only call; no keys ever reach the renderer.
+  useEffect(() => {
+    window.orbit.delegateProviders().then(setDelegateAvail).catch(() => setDelegateAvail(null))
+  }, [settingsOpen])
+
+  // The delegate models the per-chat dropdown may offer: one entry per available provider, using
+  // the model id chosen in Settings (or a sane default). Empty unless the feature is enabled.
+  const delegateModels = useMemo<DelegateModelInfo[]>(() => {
+    if (!config?.delegateEnabled || !delegateAvail) return []
+    const META: { id: DelegateProvider; label: string; fallback: string }[] = [
+      { id: 'openai', label: 'ChatGPT', fallback: 'gpt-5' },
+      { id: 'gemini', label: 'Gemini', fallback: 'gemini-2.5-pro' },
+      { id: 'composer', label: 'Composer', fallback: 'composer-2' }
+    ]
+    const out: DelegateModelInfo[] = []
+    for (const m of META) {
+      if (!delegateAvail[m.id]?.ready) continue
+      const model = config.delegateModels?.[m.id] || m.fallback
+      out.push({ provider: m.id, model, label: `${m.label} · ${model}` })
+    }
+    return out
+  }, [config?.delegateEnabled, config?.delegateModels, delegateAvail])
+
+  // Change a chat's target model. Switching back to Claude on a chat that took a delegated turn
+  // out-of-band reloads claude (--resume) so it picks up the forged turn from the transcript (2A).
+  const onSessionModelChange = useCallback(
+    (id: string, model: string) => {
+      updateSession(id, (s) => ({ ...s, selectedModel: model }))
+      if (model === 'claude') {
+        const s = sessionsRef.current.find((x) => x.id === id)
+        if (s?.delegateStale) {
+          handles.current.get(id)?.refresh()
+          updateSession(id, (x) => ({ ...x, delegateStale: false }))
+        }
+      }
+    },
+    [updateSession]
+  )
+
+  // A delegated turn finished + was written to the transcript: mark the live claude stale (so the
+  // next switch-to-Claude reconciles via --resume), adopt a freshly-created transcript id (start-
+  // of-chat case), and drop a marker into the activity feed.
+  const onDelegateComplete = useCallback(
+    (id: string, label: string, newResumeId?: string) => {
+      updateSession(id, (s) => ({
+        ...s,
+        delegateStale: true,
+        resumeId: newResumeId ?? s.resumeId,
+        activity: [
+          { id: Date.now(), ts: Date.now(), kind: 'agent' as const, icon: '↪', label: 'Delegate', detail: label },
+          ...s.activity
+        ].slice(0, 300)
+      }))
+    },
+    [updateSession]
+  )
 
   // Resize the active tab's split by moving the divider of the active window's column. Shared by
   // the Ctrl+Shift+←/→ and Alt+Shift+←/→ keyboard branches so the two paths can't drift. No-op
@@ -1946,6 +2010,16 @@ export default function App(): JSX.Element {
                     onSplit={() => createSession(s.projectPath, 'claude', { split: true })}
                     onBranch={() => void branchChat(s.id)}
                     onRemove={() => closeWindow(s.id)}
+                    footer={
+                      s.kind === 'claude' && delegateModels.length > 0 ? (
+                        <DelegateBar
+                          session={s}
+                          availableModels={delegateModels}
+                          onModelChange={(model) => onSessionModelChange(s.id, model)}
+                          onComplete={(label, newResumeId) => onDelegateComplete(s.id, label, newResumeId)}
+                        />
+                      ) : undefined
+                    }
                   >
                     <Terminal
                       ref={(h) => {

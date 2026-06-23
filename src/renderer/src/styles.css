@@ -1599,6 +1599,21 @@ body {
 .tree-scroll.search-stale {
   opacity: 0.5;
 }
+/* Shown when the file search hit its result cap — signals the list is bounded, not complete. */
+.ft-search-capped {
+  padding: 4px 12px 6px;
+  font-size: 11px;
+  color: var(--amber);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+/* Letters that the file search matched — makes the (token / regex) match self-explanatory. */
+.ft-match {
+  background-color: color-mix(in srgb, var(--amber) 35%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  font-weight: 600;
+}
 .file-search-result {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4139,4 +4154,159 @@ body {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ——— Delegate bar (per-chat non-Claude model) ———————————————————————————— */
+/* Docked between the terminal and the pane header; obeys the Window UI size setting like the
+   other chat-window chrome. Kept compact so up to four chats can sit side-by-side. */
+.delegate-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+  zoom: var(--window-ui-scale, 1);
+}
+.delegate-bar.active {
+  background: color-mix(in srgb, var(--bg-2) 88%, var(--accent));
+}
+.delegate-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.delegate-label {
+  color: var(--accent);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+.delegate-select {
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 3px 8px;
+  background: var(--bg-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 7px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.delegate-stale {
+  font-size: 11.5px;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.delegate-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.delegate-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  max-height: 120px;
+  padding: 6px 9px;
+  background: var(--bg-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 8px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+.delegate-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.delegate-btn {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.delegate-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.delegate-btn.cancel {
+  background: var(--bg-3);
+  border: 1px solid var(--red);
+  color: var(--red);
+}
+.delegate-stream {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.delegate-caret {
+  color: var(--accent);
+  animation: delegate-blink 1s steps(2, start) infinite;
+}
+@keyframes delegate-blink {
+  to {
+    visibility: hidden;
+  }
+}
+.delegate-error {
+  color: var(--red);
+}
+
+/* ——— Settings: AI provider keys ——————————————————————————————————————————— */
+.settings-provider {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.settings-provider:last-child {
+  border-bottom: none;
+}
+.settings-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-provider-name {
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.settings-provider-tag {
+  font-size: 11.5px;
+  border-radius: 999px;
+  padding: 1px 9px;
+  border: 1px solid var(--line);
+}
+.settings-provider-tag.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+}
+.settings-provider-tag.warn {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--line));
+}
+.settings-provider-tag.muted {
+  color: var(--fg-mute);
+}
+.settings-key-error {
+  color: var(--red);
 }

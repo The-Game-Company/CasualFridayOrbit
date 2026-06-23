@@ -1,19 +1,42 @@
-import { useState } from 'react'
-import type { AppConfig, ThemeName } from '../../../shared/events'
+import { useEffect, useState } from 'react'
+import type { AppConfig, DelegateProvider, DelegateStatuses, ThemeName } from '../../../shared/events'
 import { THEME_LIST } from '../themes'
 
 const DARK_THEMES = THEME_LIST.filter((t) => t.appearance === 'dark')
 const LIGHT_THEMES = THEME_LIST.filter((t) => t.appearance === 'light')
 
-type Tab = 'general' | 'appearance' | 'notifications' | 'editor' | 'advanced'
+type Tab = 'general' | 'appearance' | 'notifications' | 'editor' | 'ai' | 'advanced'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'editor', label: 'Editor' },
+  { id: 'ai', label: 'AI Models' },
   { id: 'advanced', label: 'Advanced' },
 ]
+
+/**
+ * Delegate providers shown in the AI tab. OpenAI/Gemini are REST APIs (need a key + a model id).
+ * Cursor is `cliBased`: it's driven through the logged-in `cursor-agent` CLI, so it needs no key
+ * and no model field — it just runs Cursor's Composer model.
+ */
+const DELEGATE_PROVIDERS: {
+  id: DelegateProvider
+  label: string
+  placeholder: string
+  cliBased?: boolean
+}[] = [
+  { id: 'openai', label: 'ChatGPT (OpenAI)', placeholder: 'sk-…' },
+  { id: 'gemini', label: 'Gemini (Google)', placeholder: 'AIza…' },
+  { id: 'composer', label: 'Composer (Cursor)', placeholder: '', cliBased: true },
+]
+
+/** Platform-appropriate one-liner to install the cursor-agent CLI. */
+const CURSOR_INSTALL_CMD =
+  window.orbit.platform === 'win32'
+    ? "irm 'https://cursor.com/install?win32=true' | iex"
+    : 'curl https://cursor.com/install -fsS | bash'
 
 interface Props {
   config: AppConfig
@@ -23,6 +46,39 @@ interface Props {
 
 export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element {
   const [tab, setTab] = useState<Tab>('general')
+
+  // delegate provider key state (AI tab): per-provider readiness, and per-provider draft inputs
+  const [avail, setAvail] = useState<DelegateStatuses | null>(null)
+  const [keyDrafts, setKeyDrafts] = useState<Partial<Record<DelegateProvider, string>>>({})
+  const [keyError, setKeyError] = useState<string | null>(null)
+
+  const refreshAvail = (): void => {
+    window.orbit.delegateProviders().then(setAvail)
+  }
+  useEffect(() => {
+    refreshAvail()
+  }, [])
+
+  const saveKey = async (provider: DelegateProvider): Promise<void> => {
+    const draft = (keyDrafts[provider] ?? '').trim()
+    if (!draft) return
+    setKeyError(null)
+    const res = await window.orbit.delegateSetKey(provider, draft)
+    if (!res.ok) {
+      setKeyError(res.error ?? 'Failed to save key.')
+      return
+    }
+    setKeyDrafts((d) => ({ ...d, [provider]: '' }))
+    refreshAvail()
+  }
+  const clearKey = async (provider: DelegateProvider): Promise<void> => {
+    setKeyError(null)
+    await window.orbit.delegateClearKey(provider)
+    setKeyDrafts((d) => ({ ...d, [provider]: '' }))
+    refreshAvail()
+  }
+  const setModel = (provider: DelegateProvider, model: string): void =>
+    onChange({ ...config, delegateModels: { ...config.delegateModels, [provider]: model } })
 
   const browse = async (): Promise<void> => {
     const folder = await window.orbit.pickFolder()
@@ -252,6 +308,118 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
                   />
                 </label>
               )}
+            </>
+          )}
+
+          {tab === 'ai' && (
+            <>
+              <label className="field-check">
+                <input
+                  type="checkbox"
+                  checked={config.delegateEnabled ?? false}
+                  onChange={(e) => onChange({ ...config, delegateEnabled: e.target.checked })}
+                />
+                <span>Enable delegating a chat turn to a non-Claude model</span>
+              </label>
+              <div className="field-hint">
+                Adds a model dropdown to each chat (default <b>Claude (native)</b>). Pick another
+                model to send one prompt to it — the reply streams in and is written into the
+                conversation so Claude continues with it in context. Only providers with a saved key
+                appear. Keys are encrypted on this machine and never leave it except to call the
+                provider you chose.
+              </div>
+
+              {keyError && <div className="field-hint settings-key-error">{keyError}</div>}
+
+              <div className="settings-indent">
+                {DELEGATE_PROVIDERS.map((p) => {
+                  const st = avail?.[p.id]
+                  const hasKey = !!st?.hasKey
+                  const ready = !!st?.ready
+
+                  // Cursor: CLI-based, no key/model — just show install + login status.
+                  if (p.cliBased) {
+                    return (
+                      <div key={p.id} className="settings-provider">
+                        <div className="settings-provider-head">
+                          <span className="settings-provider-name">{p.label}</span>
+                          {ready ? (
+                            <span className="settings-provider-tag ok">✓ ready</span>
+                          ) : (
+                            <span className="settings-provider-tag warn">CLI not found</span>
+                          )}
+                        </div>
+                        {ready ? (
+                          <div className="field-hint">
+                            Runs Cursor’s Composer model via the <code>cursor-agent</code> CLI using
+                            your existing Cursor login — no API key needed. If a turn fails with an
+                            auth error, run <code>cursor-agent login</code> once.
+                          </div>
+                        ) : (
+                          <>
+                            <div className="field-hint">
+                              Needs the Cursor CLI. Install it, then run{' '}
+                              <code>cursor-agent login</code> once — no API key required.
+                            </div>
+                            <div className="field-row">
+                              <input readOnly value={CURSOR_INSTALL_CMD} />
+                              <button onClick={() => window.orbit.clipboardWriteText(CURSOR_INSTALL_CMD)}>
+                                Copy
+                              </button>
+                              <button onClick={() => window.orbit.openExternal('https://cursor.com/docs/cli/installation')}>
+                                Install guide
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  }
+
+                  const modelPlaceholder = p.id === 'openai' ? 'gpt-5' : 'gemini-2.5-pro'
+                  return (
+                    <div key={p.id} className="settings-provider">
+                      <div className="settings-provider-head">
+                        <span className="settings-provider-name">{p.label}</span>
+                        {ready ? (
+                          <span className="settings-provider-tag ok">✓ key set</span>
+                        ) : (
+                          <span className="settings-provider-tag muted">no key</span>
+                        )}
+                      </div>
+
+                      <div className="field-row">
+                        <input
+                          type="password"
+                          autoComplete="off"
+                          placeholder={hasKey ? '•••••••• (stored)' : p.placeholder}
+                          value={keyDrafts[p.id] ?? ''}
+                          onChange={(e) => setKeyDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveKey(p.id)
+                          }}
+                        />
+                        <button onClick={() => saveKey(p.id)} disabled={!(keyDrafts[p.id] ?? '').trim()}>
+                          Save
+                        </button>
+                        {hasKey && <button onClick={() => clearKey(p.id)}>Clear</button>}
+                      </div>
+                      <label className="field">
+                        <span>Model</span>
+                        <input
+                          value={config.delegateModels?.[p.id] ?? ''}
+                          placeholder={modelPlaceholder}
+                          onChange={(e) => setModel(p.id, e.target.value)}
+                        />
+                      </label>
+                      <div className="field-hint">
+                        The {p.label} API requires a model id — change it to use a different model
+                        (e.g. {p.id === 'openai' ? 'gpt-5-mini' : 'gemini-2.5-flash'}).
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </>
           )}
 

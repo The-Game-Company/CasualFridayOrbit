@@ -17,7 +17,7 @@ export function encodeProjectDir(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-')
 }
 
-function projectTranscriptDir(cwd: string): string {
+export function projectTranscriptDir(cwd: string): string {
   return path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(cwd))
 }
 

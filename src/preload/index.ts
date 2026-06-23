@@ -5,6 +5,12 @@ import {
   type ContextNode,
   type CoordState,
   type CreateSessionArgs,
+  type DelegateDone,
+  type DelegateError,
+  type DelegateProvider,
+  type DelegateSendArgs,
+  type DelegateStatuses,
+  type DelegateToken,
   type ExternalChange,
   type FileNode,
   type HistoryEntry,
@@ -44,8 +50,34 @@ const api = {
   /** global UI zoom for the whole window (panels, text, icons — everything) */
   setUiZoom: (factor: number): void => webFrame.setZoomFactor(factor),
   setConfig: (cfg: AppConfig): Promise<AppConfig> => ipcRenderer.invoke(IPC.ConfigSet, cfg),
+
+  // delegate (route a turn to a non-Claude model)
+  delegateProviders: (): Promise<DelegateStatuses> => ipcRenderer.invoke(IPC.DelegateProviders),
+  delegateSetKey: (provider: DelegateProvider, key: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.DelegateSetKey, { provider, key }),
+  delegateClearKey: (provider: DelegateProvider): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.DelegateClearKey, { provider }),
+  delegateSend: (args: DelegateSendArgs): void => ipcRenderer.send(IPC.DelegateSend, args),
+  delegateCancel: (turnId: string): void => ipcRenderer.send(IPC.DelegateCancel, turnId),
+  onDelegateToken: (cb: (t: DelegateToken) => void): (() => void) => {
+    const fn = (_e: unknown, t: DelegateToken): void => cb(t)
+    ipcRenderer.on(IPC.DelegateToken, fn)
+    return () => ipcRenderer.removeListener(IPC.DelegateToken, fn)
+  },
+  onDelegateDone: (cb: (d: DelegateDone) => void): (() => void) => {
+    const fn = (_e: unknown, d: DelegateDone): void => cb(d)
+    ipcRenderer.on(IPC.DelegateDone, fn)
+    return () => ipcRenderer.removeListener(IPC.DelegateDone, fn)
+  },
+  onDelegateError: (cb: (d: DelegateError) => void): (() => void) => {
+    const fn = (_e: unknown, d: DelegateError): void => cb(d)
+    ipcRenderer.on(IPC.DelegateError, fn)
+    return () => ipcRenderer.removeListener(IPC.DelegateError, fn)
+  },
+
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.PickFolder),
   openInExplorer: (path: string): Promise<void> => ipcRenderer.invoke(IPC.OpenInExplorer, path),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC.OpenExternal, url),
   readContextFile: (path: string): Promise<string> => ipcRenderer.invoke(IPC.ContextRead, path),
   listHistory: (projectPath: string): Promise<HistoryEntry[]> =>
     ipcRenderer.invoke(IPC.HistoryList, projectPath),

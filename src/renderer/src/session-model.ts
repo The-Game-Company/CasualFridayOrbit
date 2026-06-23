@@ -121,6 +121,13 @@ export interface SessionState {
   lastPromptTs: number
   activity: ActivityItem[]
   context: ContextNode[]
+  /** the model this chat's next prompt routes to: 'claude' (native, default) or a delegate
+   *  provider id ('openai'/'gemini'/…). Renderer-only UI state, not persisted. */
+  selectedModel: string
+  /** true after a delegate turn was appended to the transcript out-of-band: the live claude
+   *  process is behind the file and must be reloaded (--resume) before it acts again. Cleared
+   *  when we reconcile (on switching the dropdown back to Claude). */
+  delegateStale: boolean
 }
 
 export function initSession(
@@ -160,7 +167,9 @@ export function initSession(
     lastPrompt: '',
     lastPromptTs: 0,
     activity: [],
-    context: []
+    context: [],
+    selectedModel: 'claude',
+    delegateStale: false
   }
 }
 

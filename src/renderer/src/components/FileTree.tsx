@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { startPathDrag } from './drag'
 import type { FileNode, KeyDoc } from '../../../shared/events'
+import { SEARCH_RESULT_CAP } from '../../../shared/limits'
 
 function ext(name: string): string {
   const i = name.lastIndexOf('.')
@@ -28,6 +29,56 @@ function fileIcon(name: string): string {
 
 function shortAgent(name: string): string {
   return name.replace(/^claude-\d{4}-\d{2}-\d{2}-/, '')
+}
+
+/**
+ * Render `text` with the letters that the active search caught wrapped in <mark>,
+ * so the match is self-explanatory. In token mode each whitespace-separated term is
+ * highlighted wherever it occurs; in regex mode the regex's matches are highlighted.
+ */
+function highlightName(text: string, terms: string[], re: RegExp | null): JSX.Element {
+  const ranges: Array<[number, number]> = []
+  if (re) {
+    re.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text)) !== null) {
+      if (m[0].length === 0) {
+        re.lastIndex++ // zero-width match — step forward so we don't loop forever
+        continue
+      }
+      ranges.push([m.index, m.index + m[0].length])
+    }
+  } else if (terms.length) {
+    const lower = text.toLowerCase()
+    for (const t of terms) {
+      let from = 0
+      let idx: number
+      while ((idx = lower.indexOf(t, from)) !== -1) {
+        ranges.push([idx, idx + t.length])
+        from = idx + t.length
+      }
+    }
+  }
+  if (ranges.length === 0) return <>{text}</>
+
+  // Merge overlapping/adjacent ranges so nested terms don't produce broken <mark>s.
+  ranges.sort((a, b) => a[0] - b[0])
+  const merged: Array<[number, number]> = []
+  for (const r of ranges) {
+    const last = merged[merged.length - 1]
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1])
+    else merged.push([r[0], r[1]])
+  }
+
+  const parts: JSX.Element[] = []
+  let cursor = 0
+  merged.forEach(([s, e], i) => {
+    if (cursor < s) parts.push(<span key={`p${i}`}>{text.slice(cursor, s)}</span>)
+    parts.push(<mark key={`m${i}`} className="ft-match">{text.slice(s, e)}</mark>)
+    cursor = e
+  })
+  if (cursor < text.length) parts.push(<span key="end">{text.slice(cursor)}</span>)
+  return <>{parts}</>
 }
 
 // ─── normal (lazy) tree ──────────────────────────────────────────────────────
@@ -137,22 +188,28 @@ interface SearchNodeProps {
   gitChanged: Set<string>
   isLeased: (path: string) => boolean
   onOpenFile: (path: string) => void
+  terms: string[]
+  highlightRe: RegExp | null
+  // Collapse state is owned by the FileTree container (not local useState) so it survives the
+  // frequent re-renders driven by streaming agent activity (busy/recent/gitChanged churn).
+  collapsed: Set<string>
+  onToggle: (path: string) => void
 }
 
-function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile }: SearchNodeProps): JSX.Element {
-  const [open, setOpen] = useState(true)
+function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile, terms, highlightRe, collapsed, onToggle }: SearchNodeProps): JSX.Element {
   const pad = { paddingLeft: 8 + depth * 12 }
 
   if (node.type === 'dir') {
+    const open = !collapsed.has(node.path)
     return (
       <>
-        <div className="ctx-row dir" style={pad} onClick={() => setOpen((v) => !v)}>
+        <div className="ctx-row dir" style={pad} onClick={() => onToggle(node.path)}>
           <span className="ctx-caret">{open ? '▾' : '▸'}</span>
-          {node.name}
+          {highlightName(node.name, terms, highlightRe)}
         </div>
         {open &&
           node.children.map((c) => (
-            <SearchNode key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} />
+            <SearchNode key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} terms={terms} highlightRe={highlightRe} collapsed={collapsed} onToggle={onToggle} />
           ))}
       </>
     )
@@ -172,7 +229,7 @@ function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFil
       title={leased ? `${node.path} — leased by another agent` : node.path}
     >
       <span className="ctx-icon">{isBusy ? '✱' : fileIcon(node.name)}</span>
-      {node.name}
+      {highlightName(node.name, terms, highlightRe)}
       {leased && <span className="ctx-lock" title="held by an agent lease">🔒</span>}
     </div>
   )
@@ -286,8 +343,20 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
   const [results, setResults] = useState<FileNode[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [regexError, setRegexError] = useState(false)
+  // Paths of directories the user has collapsed in the search-results tree. Owned here (not in
+  // each SearchNode) so a collapse survives re-renders triggered by streaming agent activity.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchIdRef = useRef(0)
+
+  const toggleCollapsed = (path: string): void => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
 
   const [pinContext, setPinContext] = useState<boolean>(() => {
     return localStorage.getItem(RECENTS_PIN_KEY) === 'true'
@@ -317,6 +386,7 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
       setResults(null)
       setSearching(false)
       setRegexError(false)
+      setCollapsed(new Set()) // closing the search resets the collapsed-dir set
       return
     }
     if (useRegex) {
@@ -340,6 +410,18 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
 
   const trimmed = query.trim()
   const searchTree = trimmed && results && root ? buildSearchTree(results, root) : null
+
+  // What to highlight in result names: each whitespace term (token mode) or the regex's
+  // matches (regex mode). Mirrors the matching logic in search-worker.ts.
+  const terms = !useRegex && trimmed ? trimmed.toLowerCase().split(/\s+/).filter(Boolean) : []
+  let highlightRe: RegExp | null = null
+  if (useRegex && trimmed && !regexError) {
+    try {
+      highlightRe = new RegExp(trimmed, 'gi')
+    } catch {
+      highlightRe = null
+    }
+  }
 
   // files to show in recents: currently busy (not yet in recent) + recently completed
   const recentItems = [
@@ -396,7 +478,7 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
       <div className="file-search-bar">
         <input
           className={`file-search-input${regexError ? ' error' : ''}`}
-          placeholder="search files…"
+          placeholder={useRegex ? 'search files (regex)…' : 'search files — e.g. apple document'}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
@@ -418,6 +500,11 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
             {!regexError && !searching && results?.length === 0 && (
               <div className="ctx-empty">no matches</div>
             )}
+            {!regexError && results && results.length >= SEARCH_RESULT_CAP && (
+              <div className="ft-search-capped">
+                showing first {SEARCH_RESULT_CAP} matches — refine your search
+              </div>
+            )}
             {searchTree?.map((n) => (
               <SearchNode
                 key={n.path}
@@ -428,6 +515,10 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
                 gitChanged={gitChanged}
                 isLeased={isLeased}
                 onOpenFile={onOpenFile}
+                terms={terms}
+                highlightRe={highlightRe}
+                collapsed={collapsed}
+                onToggle={toggleCollapsed}
               />
             ))}
           </div>

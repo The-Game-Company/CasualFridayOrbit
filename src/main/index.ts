@@ -18,8 +18,10 @@ import { CoordinationWatcher } from './coordination'
 import { LogWatcher, listKeyDocs } from './logs'
 import { readProjectConfig } from './project-config'
 import { fixGuiPath } from './shell-path'
+import { runDelegate, cancelDelegate, delegateStatuses } from './delegate'
+import { setKey as setProviderKey, clearKey as clearProviderKey } from './provider-keys'
 
-import { IPC, type AppConfig, type CreateSessionArgs, type HookEvent, type McpServer, type WorkspaceState } from '../shared/events'
+import { IPC, type AppConfig, type CreateSessionArgs, type DelegateSendArgs, type HookEvent, type McpServer, type WorkspaceState } from '../shared/events'
 
 
 // Single-instance guard: only one Orbit may run. If a second copy is launched, it exits
@@ -455,8 +457,31 @@ function registerIpc(): void {
     return saved
   })
 
+  // ——— Delegate (route a turn to a non-Claude model) ———————————————————————
+  // Keys live encrypted in provider-keys.ts; only availability booleans cross to the renderer.
+  ipcMain.handle(IPC.DelegateProviders, () => delegateStatuses())
+  ipcMain.handle(IPC.DelegateSetKey, (_e, a: { provider: string; key: string }) =>
+    setProviderKey(a.provider, a.key)
+  )
+  ipcMain.handle(IPC.DelegateClearKey, (_e, a: { provider: string }) => clearProviderKey(a.provider))
+  // Fire-and-forget: the answer streams back over DelegateToken/Done/Error.
+  ipcMain.on(IPC.DelegateSend, (_e, args: DelegateSendArgs) => {
+    void runDelegate(args, {
+      onToken: (chunk) => send(IPC.DelegateToken, { turnId: args.turnId, sessionId: args.sessionId, chunk }),
+      onDone: (text, newResumeId) =>
+        send(IPC.DelegateDone, { turnId: args.turnId, sessionId: args.sessionId, text, newResumeId }),
+      onError: (message) => send(IPC.DelegateError, { turnId: args.turnId, sessionId: args.sessionId, message })
+    })
+  })
+  ipcMain.on(IPC.DelegateCancel, (_e, turnId: string) => cancelDelegate(turnId))
+
   ipcMain.handle(IPC.OpenInExplorer, (_e, folderPath: string) => {
     shell.showItemInFolder(folderPath)
+  })
+
+  ipcMain.handle(IPC.OpenExternal, (_e, url: string) => {
+    // only open real web/docs links — never arbitrary file/scheme URLs from the renderer
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
   })
 
   ipcMain.handle(IPC.PickFolder, async () => {

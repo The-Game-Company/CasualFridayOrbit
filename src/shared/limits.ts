@@ -18,6 +18,14 @@ export const MAX_EDIT_BYTES = 50 * 1024 * 1024 // 50 MB
  */
 export const LEAN_EDIT_BYTES = 2 * 1024 * 1024 // 2 MB
 
+/**
+ * Hard ceiling on file-search matches returned to the renderer. The results tree is rendered
+ * fully expanded with no virtualization, so an unbounded broad query (e.g. a common token that
+ * hits thousands of files) would freeze the renderer building and reconciling that many rows.
+ * The worker stops walking once it has this many hits; the UI shows a "refine your search" note.
+ */
+export const SEARCH_RESULT_CAP = 1000
+
 /** Format a byte count for user-facing messages (e.g. "12.4 MB", "873 KB"). */
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`

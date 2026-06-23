@@ -22,16 +22,19 @@ interface Props {
   onBranch: () => void
   onRemove: () => void
   children: ReactNode
+  /** optional strip docked between the terminal and the header (e.g. the delegate model bar) */
+  footer?: ReactNode
 }
 
 /** A single window in a tab: a header bar + the terminal underneath. */
-export function Pane({ session, active, canRemove, canBranch, autoFocused, draggable, onDragStart, onDragEnd, onFocus, onSplit, onBranch, onRemove, children }: Props): JSX.Element {
+export function Pane({ session, active, canRemove, canBranch, autoFocused, draggable, onDragStart, onDragEnd, onFocus, onSplit, onBranch, onRemove, children, footer }: Props): JSX.Element {
   return (
     <div
       className={`pane ${active ? 'active' : ''} ${session.activeSkill ? 'skill' : ''} ${autoFocused ? 'auto-focused' : ''}`}
       onMouseDown={onFocus}
     >
       <div className="pane-body">{children}</div>
+      {footer}
       <div
         className="pane-head"
         draggable={draggable}
