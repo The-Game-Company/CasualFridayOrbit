@@ -33,25 +33,36 @@ function findOnPath(name: string): string | null {
   return null
 }
 
-/** Resolve the cursor-agent binary (installed as `cursor-agent`, with `agent` as an alias). */
+/**
+ * Resolve the cursor-agent binary. PATH first (covers a logged-in shell), then the known install
+ * dirs — important because Orbit's process captured PATH at launch, so a freshly-installed CLI
+ * won't be on our PATH until restart; probing the install dir lets a Settings "Re-check" find it.
+ * On Windows the installer drops a `cursor-agent.cmd` shim in %LOCALAPPDATA%\cursor-agent.
+ */
 export function resolveCursorAgent(): string | null {
   const names =
     process.platform === 'win32'
-      ? ['cursor-agent.exe', 'cursor-agent.cmd', 'cursor-agent', 'agent.exe', 'agent.cmd', 'agent']
+      ? ['cursor-agent.cmd', 'cursor-agent.exe', 'cursor-agent', 'agent.cmd', 'agent.exe', 'agent']
       : ['cursor-agent', 'agent']
   for (const n of names) {
     const p = findOnPath(n)
     if (p) return p
   }
   const home = os.homedir()
-  for (const f of [
-    path.join(home, '.local', 'bin', 'cursor-agent'),
-    path.join(home, '.cursor', 'bin', 'cursor-agent')
-  ]) {
-    try {
-      if (fs.existsSync(f)) return f
-    } catch {
-      /* ignore */
+  const dirs = [
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'cursor-agent'),
+    path.join(home, 'AppData', 'Local', 'cursor-agent'),
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.cursor', 'bin')
+  ].filter((d): d is string => !!d)
+  for (const d of dirs) {
+    for (const n of names) {
+      const f = path.join(d, n)
+      try {
+        if (fs.existsSync(f)) return f
+      } catch {
+        /* ignore */
+      }
     }
   }
   return null
@@ -85,19 +96,23 @@ export async function streamCursor(args: StreamArgs): Promise<string> {
   const bin = resolveCursorAgent()
   if (!bin) throw new Error('Cursor CLI (cursor-agent) is not installed or not on PATH.')
 
-  // Hand prior chat context over via a temp file, referenced from the (short) prompt arg.
-  let tmpFile: string | null = null
+  // Pass the (possibly multi-line) prompt + context through a temp FILE, never the command line:
+  // cursor-agent reads file paths mentioned in the prompt, and this sidesteps Windows .cmd arg
+  // quoting entirely — the only CLI arg is a fixed instruction plus a safe temp path.
+  const taskFile = path.join(os.tmpdir(), `orbit-delegate-${randomUUID()}.md`)
+  let wroteFile = false
   let promptArg = args.prompt
-  const ctxText = contextToText(args.context)
-  if (ctxText) {
-    const f = path.join(os.tmpdir(), `orbit-delegate-${randomUUID()}.md`)
-    try {
-      fs.writeFileSync(f, ctxText, 'utf8')
-      tmpFile = f
-      promptArg = `${args.prompt}\n\n[The earlier conversation for this task is saved at: ${f} — read that file for background before answering.]`
-    } catch {
-      tmpFile = null
-    }
+  try {
+    const ctx = contextToText(args.context)
+    const body = `# Task\n\n${args.prompt}\n${ctx ? `\n# Prior conversation (context)\n\n${ctx}\n` : ''}`
+    fs.writeFileSync(taskFile, body, 'utf8')
+    wroteFile = true
+    promptArg =
+      `Read the file "${taskFile}". It contains a "# Task" to complete` +
+      (args.context.messages.length ? ' plus a "# Prior conversation (context)" section for background' : '') +
+      '. Do the task and reply with your answer.'
+  } catch {
+    promptArg = args.prompt // best-effort fallback: inline prompt
   }
 
   const cliArgs = ['-p', '--output-format', 'stream-json', '--stream-partial-output']
@@ -143,9 +158,9 @@ export async function streamCursor(args: StreamArgs): Promise<string> {
 
     const cleanup = (): void => {
       args.signal.removeEventListener('abort', onAbort)
-      if (tmpFile) {
+      if (wroteFile) {
         try {
-          fs.unlinkSync(tmpFile)
+          fs.unlinkSync(taskFile)
         } catch {
           /* ignore */
         }

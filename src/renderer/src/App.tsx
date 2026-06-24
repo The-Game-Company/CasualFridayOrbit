@@ -620,22 +620,25 @@ export default function App(): JSX.Element {
     window.orbit.delegateProviders().then(setDelegateAvail).catch(() => setDelegateAvail(null))
   }, [settingsOpen])
 
-  // The delegate models the per-chat dropdown may offer: one entry per available provider, using
-  // the model id chosen in Settings (or a sane default). Empty unless the feature is enabled.
+  // Options for the per-chat dropdown: one per provider when the feature is on. Not-ready providers
+  // are still listed (disabled) so the dropdown nudges the user to Settings instead of vanishing.
   const delegateModels = useMemo<DelegateModelInfo[]>(() => {
-    if (!config?.delegateEnabled || !delegateAvail) return []
-    const META: { id: DelegateProvider; label: string; fallback: string }[] = [
-      { id: 'openai', label: 'ChatGPT', fallback: 'gpt-5' },
-      { id: 'gemini', label: 'Gemini', fallback: 'gemini-2.5-pro' },
-      { id: 'composer', label: 'Composer', fallback: 'composer-2' }
+    if (!config?.delegateEnabled) return []
+    const META: { id: DelegateProvider; label: string; fallback: string; setup: string }[] = [
+      { id: 'openai', label: 'ChatGPT', fallback: 'gpt-5', setup: 'add a key in Settings' },
+      { id: 'gemini', label: 'Gemini', fallback: 'gemini-2.5-pro', setup: 'add a key in Settings' },
+      { id: 'composer', label: 'Composer', fallback: 'composer-2', setup: 'install Cursor CLI' }
     ]
-    const out: DelegateModelInfo[] = []
-    for (const m of META) {
-      if (!delegateAvail[m.id]?.ready) continue
+    return META.map((m) => {
+      const ready = !!delegateAvail?.[m.id]?.ready
       const model = config.delegateModels?.[m.id] || m.fallback
-      out.push({ provider: m.id, model, label: `${m.label} · ${model}` })
-    }
-    return out
+      return {
+        provider: m.id,
+        model,
+        ready,
+        label: ready ? `${m.label} · ${model}` : `${m.label} — ${m.setup}`
+      }
+    })
   }, [config?.delegateEnabled, config?.delegateModels, delegateAvail])
 
   // Change a chat's target model. Switching back to Claude on a chat that took a delegated turn
@@ -1771,6 +1774,54 @@ export default function App(): JSX.Element {
     setTimeout(() => handles.current.get(dragId)?.focus(), 0)
   }
 
+  /** Commit a drag onto empty tab-bar space: pop the dragged window out of its current tab into a
+   *  brand-new tab of its own, appended at the end (same placement as the + button). The emptied
+   *  source tab collapses one window; weights reset wherever the column count changed. No-op if the
+   *  window is already alone in its tab (nothing to extract). */
+  function popWindowToNewTab(): void {
+    const dragId = dragWin
+    setDragWin(null)
+    setDropHint(null)
+    if (!dragId) return
+    const source = tabs.find((t) => tabWindows(t).includes(dragId))
+    if (!source || tabWindows(source).length <= 1) return
+    const { projectPath } = source
+    const newTabId = uid()
+    setTabs((prev) => {
+      const next = prev
+        .map((t) => {
+          if (t.id !== source.id) return t
+          const columns = t.columns.map((c) => c.filter((w) => w !== dragId)).filter((c) => c.length > 0)
+          const colWeights = columns.length === t.columns.length ? t.colWeights : undefined
+          const activeWindow = t.activeWindow === dragId ? (columns[0]?.[0] ?? '') : t.activeWindow
+          return { ...t, columns, colWeights, activeWindow }
+        })
+        .filter((t) => t.columns.length > 0)
+      next.push({ id: newTabId, projectPath, columns: [[dragId]], activeWindow: dragId })
+      return next
+    })
+    setActiveProject(projectPath)
+    setActiveTabId(newTabId)
+    updateSession(dragId, (x) => ({ ...x, unseen: false, status: x.status === 'waiting' ? 'idle' : x.status }))
+    setTimeout(() => handles.current.get(dragId)?.focus(), 0)
+  }
+
+  /** Reorder tabs: move `draggedId` to just before/after `targetId`. Operates on the flat tab list
+   *  (other projects' tabs keep their relative positions); both ids are same-project by construction
+   *  since only the active project's tabs are shown in the bar. */
+  function reorderTab(draggedId: string, targetId: string, before: boolean): void {
+    if (draggedId === targetId) return
+    setTabs((prev) => {
+      const moved = prev.find((t) => t.id === draggedId)
+      if (!moved) return prev
+      const without = prev.filter((t) => t.id !== draggedId)
+      const ti = without.findIndex((t) => t.id === targetId)
+      if (ti < 0) return prev
+      without.splice(before ? ti : ti + 1, 0, moved)
+      return without
+    })
+  }
+
   const pickSkill = (sk: Skill): void => {
     if (!activeId) return
     window.orbit.sessionInput(activeId, sk.command + ' ')
@@ -1882,6 +1933,8 @@ export default function App(): JSX.Element {
         canNew={!!activeProject}
         dragWin={dragWin}
         onDropWindow={dropWindowOnTab}
+        onDropNewTab={popWindowToNewTab}
+        onReorderTab={reorderTab}
       />
       <div className={`columns ${dragging ? 'resizing' : ''} ${vDragging ? 'vresizing' : ''}`}>
         {collapsed.left ? (

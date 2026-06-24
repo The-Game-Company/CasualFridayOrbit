@@ -651,6 +651,17 @@ body {
   background: color-mix(in srgb, var(--accent) 18%, var(--bg));
   box-shadow: inset 0 -2px 0 var(--accent);
 }
+/* tab being dragged to reorder — dim it so the gap it leaves reads clearly */
+.tab.dragging {
+  opacity: 0.4;
+}
+/* insertion marker for tab reorder: an accent bar on the edge the tab would land against */
+.tab.reorder-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.tab.reorder-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
 .tab.paused .tab-kind {
   color: var(--amber);
 }
@@ -697,6 +708,25 @@ body {
   margin-left: 8px;
   color: var(--fg-mute);
   font-size: 12px;
+}
+/* trailing empty space: fills the bar so it stays a native window-drag region (drag to move the
+   window, double-click to maximize) — until a window is dragged, when it flips into a real DnD
+   drop target for popping that window out into its own new tab. */
+.tab-fill {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 36px;
+  -webkit-app-region: drag;
+}
+.tab-fill.can-pop {
+  -webkit-app-region: no-drag;
+}
+.tab-fill.pop-target {
+  margin: 6px 4px 0;
+  border-radius: 7px 7px 0 0;
+  border: 1px dashed var(--accent);
+  border-bottom: none;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 /* ---------- dropdown / context menu ---------- */
@@ -4306,6 +4336,12 @@ body {
 }
 .settings-provider-tag.muted {
   color: var(--fg-mute);
+}
+.settings-recheck {
+  align-items: center;
+}
+.settings-recheck .field-hint {
+  margin: 0;
 }
 .settings-key-error {
   color: var(--red);

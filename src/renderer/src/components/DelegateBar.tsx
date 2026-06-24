@@ -29,8 +29,9 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
   const streamBoxRef = useRef<HTMLDivElement>(null)
 
   const selected = session.selectedModel || 'claude'
-  const isDelegate = selected !== 'claude'
   const current = availableModels.find((m) => m.provider === selected) ?? null
+  // a delegate turn is only possible on a *ready* provider; not-ready selections just show a hint
+  const isDelegate = selected !== 'claude' && !!current?.ready
 
   // Stream subscriptions: filter to this session + the in-flight turn.
   useEffect(() => {
@@ -105,7 +106,7 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
         >
           <option value="claude">Claude (native)</option>
           {availableModels.map((m) => (
-            <option key={m.provider} value={m.provider}>
+            <option key={m.provider} value={m.provider} disabled={!m.ready}>
               {m.label}
             </option>
           ))}

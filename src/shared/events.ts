@@ -268,13 +268,15 @@ export interface DelegateProviderStatus {
 
 export type DelegateStatuses = Record<DelegateProvider, DelegateProviderStatus>
 
-/** A selectable delegate model surfaced in the per-chat dropdown. */
+/** A delegate model surfaced in the per-chat dropdown (ready ones selectable, others shown disabled). */
 export interface DelegateModelInfo {
   provider: DelegateProvider
   /** provider model id, e.g. "gpt-5" / "gemini-2.5-pro" */
   model: string
   /** human label shown in the dropdown */
   label: string
+  /** usable now (key/CLI present); false entries appear disabled to nudge the user to Settings */
+  ready: boolean
 }
 
 /** Arguments for streaming a delegated turn through a non-Claude model. */

@@ -324,9 +324,16 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
               <div className="field-hint">
                 Adds a model dropdown to each chat (default <b>Claude (native)</b>). Pick another
                 model to send one prompt to it — the reply streams in and is written into the
-                conversation so Claude continues with it in context. Only providers with a saved key
-                appear. Keys are encrypted on this machine and never leave it except to call the
-                provider you chose.
+                conversation so Claude continues with it in context. Keys are encrypted on this
+                machine and never leave it except to call the provider you chose.
+              </div>
+
+              <div className="field-row settings-recheck">
+                <button onClick={refreshAvail}>Re-check providers</button>
+                <span className="field-hint">
+                  Run this after installing the Cursor CLI or signing in — Orbit re-detects without a
+                  restart.
+                </span>
               </div>
 
               {keyError && <div className="field-hint settings-key-error">{keyError}</div>}

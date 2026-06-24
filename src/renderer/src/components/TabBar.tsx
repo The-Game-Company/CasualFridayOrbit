@@ -20,6 +20,10 @@ interface Props {
   dragWin: string | null
   /** merge the dragged window into this tab */
   onDropWindow: (tabId: string) => void
+  /** pop the dragged window out into a brand-new tab of its own (drop on empty tab-bar space) */
+  onDropNewTab: () => void
+  /** reorder tabs: move `draggedId` to just before/after `targetId` */
+  onReorderTab: (draggedId: string, targetId: string, before: boolean) => void
 }
 
 /** Roll a tab's windows up into one status: busy beats waiting beats idle. */
@@ -40,11 +44,28 @@ export function TabBar({
   onContext,
   canNew,
   dragWin,
-  onDropWindow
+  onDropWindow,
+  onDropNewTab,
+  onReorderTab
 }: Props): JSX.Element {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [dropTab, setDropTab] = useState<string | null>(null)
+  // empty-space pop-out: highlighted while a poppable window hovers the trailing fill
+  const [popHover, setPopHover] = useState(false)
+  // tab reorder drag: id of the tab being dragged, and where it would land (target tab + side)
+  const [dragTabId, setDragTabId] = useState<string | null>(null)
+  const [reorder, setReorder] = useState<{ id: string; before: boolean } | null>(null)
   const byId = new Map(sessions.map((s) => [s.id, s]))
+
+  // a window can be "popped out" into its own new tab only if it currently shares a tab with
+  // others — extracting a lone window would just recreate the same single-window tab
+  const dragTab = dragWin ? tabs.find((t) => tabWindows(t).includes(dragWin)) : null
+  const canPop = !!dragTab && tabWindows(dragTab).length > 1
+  // which side of `el` the cursor is on — drives the before/after reorder insertion edge
+  const beforeHalf = (e: { clientX: number }, el: HTMLElement): boolean => {
+    const r = el.getBoundingClientRect()
+    return e.clientX < r.left + r.width / 2
+  }
 
   const pick = (kind: TermKind): void => {
     setMenu(null)
@@ -78,26 +99,52 @@ export function TabBar({
         const paused = !ids.some((id) => startedIds.has(id))
         // a dragged window can merge into any tab except the one it already lives in
         const canDrop = !!dragWin && !ids.includes(dragWin)
+        // a tab-reorder drag can land on any tab except the one being dragged
+        const canReorder = !!dragTabId && dragTabId !== t.id
+        const reorderEdge = canReorder && reorder?.id === t.id ? (reorder.before ? 'before' : 'after') : ''
         return (
           <div
             key={t.id}
-            className={`tab ${t.id === activeTabId ? 'active' : ''} ${count > 1 ? 'split' : ''} ${paused ? 'paused' : ''} ${skill ? 'skill' : ''} ${canDrop && dropTab === t.id ? 'drop-target' : ''}`}
+            className={`tab ${t.id === activeTabId ? 'active' : ''} ${count > 1 ? 'split' : ''} ${paused ? 'paused' : ''} ${skill ? 'skill' : ''} ${canDrop && dropTab === t.id ? 'drop-target' : ''} ${dragTabId === t.id ? 'dragging' : ''} ${reorderEdge ? `reorder-${reorderEdge}` : ''}`}
+            draggable
             onClick={() => onSelect(t.id)}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', t.id)
+              e.dataTransfer.effectAllowed = 'move'
+              setDragTabId(t.id)
+            }}
+            onDragEnd={() => {
+              setDragTabId(null)
+              setReorder(null)
+            }}
             onDragOver={(e) => {
-              if (!canDrop) return
-              e.preventDefault()
-              e.dataTransfer.dropEffect = 'move'
-              setDropTab((prev) => (prev === t.id ? prev : t.id))
+              if (canDrop) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                setDropTab((prev) => (prev === t.id ? prev : t.id))
+              } else if (canReorder) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                const before = beforeHalf(e, e.currentTarget)
+                setReorder((prev) => (prev?.id === t.id && prev.before === before ? prev : { id: t.id, before }))
+              }
             }}
             onDragLeave={(e) => {
-              if (!e.currentTarget.contains(e.relatedTarget as Node))
-                setDropTab((prev) => (prev === t.id ? null : prev))
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return
+              setDropTab((prev) => (prev === t.id ? null : prev))
+              setReorder((prev) => (prev?.id === t.id ? null : prev))
             }}
             onDrop={(e) => {
-              if (!canDrop) return
-              e.preventDefault()
-              setDropTab(null)
-              onDropWindow(t.id)
+              if (canDrop) {
+                e.preventDefault()
+                setDropTab(null)
+                onDropWindow(t.id)
+              } else if (canReorder) {
+                e.preventDefault()
+                const before = beforeHalf(e, e.currentTarget)
+                setReorder(null)
+                onReorderTab(dragTabId!, t.id, before)
+              }
             }}
             onContextMenu={(e) => {
               e.preventDefault()
@@ -164,6 +211,29 @@ export function TabBar({
         </div>
       )}
       {tabs.length === 0 && <span className="tab-hint">no sessions — pick a project on the left</span>}
+
+      {/* trailing empty space: a native window-drag region (so dragging it moves the window) that
+          flips into a drop target while a poppable window is dragged — drop here to pop that
+          window out of its tab into a brand-new tab of its own. */}
+      <div
+        className={`tab-fill ${canPop ? 'can-pop' : ''} ${canPop && popHover ? 'pop-target' : ''}`}
+        title={canPop ? 'Drop here to open in a new tab' : undefined}
+        onDragOver={(e) => {
+          if (!canPop) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+          if (!popHover) setPopHover(true)
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setPopHover(false)
+        }}
+        onDrop={(e) => {
+          if (!canPop) return
+          e.preventDefault()
+          setPopHover(false)
+          onDropNewTab()
+        }}
+      />
     </div>
   )
 }
