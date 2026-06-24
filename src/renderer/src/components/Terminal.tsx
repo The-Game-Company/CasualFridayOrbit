@@ -233,6 +233,15 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     const csiHSub = term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode)
     const csiLSub = term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode)
 
+    // Copy-on-select (PuTTY/Linux-terminal style): the moment a drag finishes a non-empty
+    // selection, push it to the clipboard so you never need Ctrl+C. Ctrl+C / Ctrl+Shift+C still
+    // work for the keyboard crowd. Empty selections (a plain click that clears) are ignored so a
+    // click never wipes the clipboard.
+    const selectionSub = term.onSelectionChange(() => {
+      const sel = term.getSelection()
+      if (sel) window.orbit.clipboardWriteText(sel)
+    })
+
     // Copy / paste are wired explicitly. With the WebGL renderer xterm draws to a canvas, so
     // there's no DOM selection for the OS to copy, and we deliberately keep the app menu from
     // grabbing Ctrl+C / Ctrl+V (those belong to the terminal). Conventions match Windows
@@ -306,6 +315,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
       titleSub.dispose()
       csiHSub.dispose()
       csiLSub.dispose()
+      selectionSub.dispose()
       scrollSub.dispose()
       writeSub.dispose()
       for (const p of promptsRef.current) p.marker.dispose()
