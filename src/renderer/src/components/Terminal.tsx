@@ -218,6 +218,21 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     const inputSub = term.onData((d) => window.orbit.sessionInput(props.sessionId, d))
     const titleSub = term.onTitleChange((t) => onTitleRef.current?.(t))
 
+    // The latest Claude CLI turns on xterm mouse tracking (DECSET ?1000/1002/1003/1006…).
+    // xterm reacts by disabling its own text-selection service and handing every drag to the
+    // app, so drag-to-select and Ctrl+C-copy silently stop working (no selection → our Ctrl+C
+    // handler below falls through to ^C). Orbit is for reading/copying claude's output and has
+    // its own scroll/jump UI, so we don't want claude grabbing the mouse. Swallow just the
+    // mouse-tracking set/reset sequences at the parser (focus 1004, bracketed-paste 2004,
+    // alt-screen, cursor visibility, etc. pass through untouched) so selection stays enabled —
+    // restoring exactly the pre-mouse-mode behavior.
+    // ponytail: parser-level swallow, the robust-but-lazy alternative to filtering the pty stream.
+    const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016])
+    const swallowMouseMode = (params: (number | number[])[]): boolean =>
+      params.length > 0 && params.every((p) => typeof p === 'number' && MOUSE_MODES.has(p))
+    const csiHSub = term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode)
+    const csiLSub = term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode)
+
     // Copy / paste are wired explicitly. With the WebGL renderer xterm draws to a canvas, so
     // there's no DOM selection for the OS to copy, and we deliberately keep the app menu from
     // grabbing Ctrl+C / Ctrl+V (those belong to the terminal). Conventions match Windows
@@ -289,6 +304,8 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
       observer.disconnect()
       inputSub.dispose()
       titleSub.dispose()
+      csiHSub.dispose()
+      csiLSub.dispose()
       scrollSub.dispose()
       writeSub.dispose()
       for (const p of promptsRef.current) p.marker.dispose()
