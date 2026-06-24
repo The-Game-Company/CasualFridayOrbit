@@ -71,6 +71,15 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   const [pinnedText, setPinnedText] = useState<string | null>(null)
   // true while the viewport is scrolled up off the live bottom — shows the ↓ jump button
   const [scrolledUp, setScrolledUp] = useState(false)
+  // brief "Copied ✓" confirmation flash, shown when an xterm-side selection hits the clipboard
+  // (Claude's own copies show its native "Copied" indicator, so we don't double up on those)
+  const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<number>(0)
+  const flashCopied = useCallback((): void => {
+    setCopied(true)
+    clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1100)
+  }, [])
   // latest onTitle, so the once-only create effect always calls the current callback
   const onTitleRef = useRef(props.onTitle)
   onTitleRef.current = props.onTitle
@@ -218,28 +227,32 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     const inputSub = term.onData((d) => window.orbit.sessionInput(props.sessionId, d))
     const titleSub = term.onTitleChange((t) => onTitleRef.current?.(t))
 
-    // The latest Claude CLI turns on xterm mouse tracking (DECSET ?1000/1002/1003/1006…).
-    // xterm reacts by disabling its own text-selection service and handing every drag to the
-    // app, so drag-to-select and Ctrl+C-copy silently stop working (no selection → our Ctrl+C
-    // handler below falls through to ^C). Orbit is for reading/copying claude's output and has
-    // its own scroll/jump UI, so we don't want claude grabbing the mouse. Swallow just the
-    // mouse-tracking set/reset sequences at the parser (focus 1004, bracketed-paste 2004,
-    // alt-screen, cursor visibility, etc. pass through untouched) so selection stays enabled —
-    // restoring exactly the pre-mouse-mode behavior.
-    // ponytail: parser-level swallow, the robust-but-lazy alternative to filtering the pty stream.
-    const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016])
-    const swallowMouseMode = (params: (number | number[])[]): boolean =>
-      params.length > 0 && params.every((p) => typeof p === 'number' && MOUSE_MODES.has(p))
-    const csiHSub = term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode)
-    const csiLSub = term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode)
+    // Claude copies the selection by emitting OSC 52 (`ESC ] 52 ; c ; <base64> BEL`) — that's the
+    // "Copied" you see in its UI. xterm has no built-in OSC 52 handler, so without this it drops
+    // the sequence and nothing ever reaches the OS clipboard. Wire it up so Claude's own
+    // select-and-copy (and its wheel-scroll, which rides the same mouse mode we leave enabled)
+    // works. data is "<target>;<base64>"; the payload is base64 of UTF-8 bytes.
+    const oscSub = term.parser.registerOscHandler(52, (data) => {
+      const b64 = data.slice(data.indexOf(';') + 1)
+      if (!b64 || b64 === '?') return true // a clipboard *read* query — we don't expose it
+      try {
+        const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
+        if (text) window.orbit.clipboardWriteText(text)
+      } catch {
+        /* malformed base64 — ignore */
+      }
+      return true
+    })
 
-    // Copy-on-select (PuTTY/Linux-terminal style): the moment a drag finishes a non-empty
-    // selection, push it to the clipboard so you never need Ctrl+C. Ctrl+C / Ctrl+Shift+C still
-    // work for the keyboard crowd. Empty selections (a plain click that clears) are ignored so a
-    // click never wipes the clipboard.
+    // For selecting arbitrary on-screen text (not just what Claude offers): Claude owns the mouse,
+    // so a local xterm selection needs Shift+drag. When one lands, copy it and flash "Copied ✓".
+    // Empty selections (a plain click that clears) are ignored so a click never wipes the clipboard.
     const selectionSub = term.onSelectionChange(() => {
       const sel = term.getSelection()
-      if (sel) window.orbit.clipboardWriteText(sel)
+      if (sel) {
+        window.orbit.clipboardWriteText(sel)
+        flashCopied()
+      }
     })
 
     // Copy / paste are wired explicitly. With the WebGL renderer xterm draws to a canvas, so
@@ -270,7 +283,10 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
       if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'c' && (e.shiftKey || term.hasSelection())) {
         const sel = term.getSelection()
-        if (sel) window.orbit.clipboardWriteText(sel)
+        if (sel) {
+          window.orbit.clipboardWriteText(sel)
+          flashCopied()
+        }
         e.preventDefault()
         return false // copied — don't also send ^C
       }
@@ -310,11 +326,11 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
     return () => {
       cancelAnimationFrame(raf)
+      clearTimeout(copiedTimerRef.current)
       observer.disconnect()
       inputSub.dispose()
       titleSub.dispose()
-      csiHSub.dispose()
-      csiLSub.dispose()
+      oscSub.dispose()
       selectionSub.dispose()
       scrollSub.dispose()
       writeSub.dispose()
@@ -484,6 +500,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
           ↓
         </button>
       )}
+      {copied && <div className="copied-flash">Copied ✓</div>}
       <div ref={hostRef} className="terminal-xterm" />
       {props.kind === 'claude' && !!props.quickPrompts?.length && (
         // docked under claude's input box (always rendered, so the terminal never resizes on
