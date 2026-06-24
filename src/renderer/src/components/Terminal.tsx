@@ -71,14 +71,6 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   const [pinnedText, setPinnedText] = useState<string | null>(null)
   // true while the viewport is scrolled up off the live bottom — shows the ↓ jump button
   const [scrolledUp, setScrolledUp] = useState(false)
-  // brief "Copied ✓" confirmation flash, shown whenever a selection is written to the clipboard
-  const [copied, setCopied] = useState(false)
-  const copiedTimerRef = useRef<number>(0)
-  const flashCopied = useCallback((): void => {
-    setCopied(true)
-    clearTimeout(copiedTimerRef.current)
-    copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1100)
-  }, [])
   // latest onTitle, so the once-only create effect always calls the current callback
   const onTitleRef = useRef(props.onTitle)
   onTitleRef.current = props.onTitle
@@ -247,10 +239,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     // click never wipes the clipboard.
     const selectionSub = term.onSelectionChange(() => {
       const sel = term.getSelection()
-      if (sel) {
-        window.orbit.clipboardWriteText(sel)
-        flashCopied()
-      }
+      if (sel) window.orbit.clipboardWriteText(sel)
     })
 
     // Copy / paste are wired explicitly. With the WebGL renderer xterm draws to a canvas, so
@@ -281,10 +270,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
       if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'c' && (e.shiftKey || term.hasSelection())) {
         const sel = term.getSelection()
-        if (sel) {
-          window.orbit.clipboardWriteText(sel)
-          flashCopied()
-        }
+        if (sel) window.orbit.clipboardWriteText(sel)
         e.preventDefault()
         return false // copied — don't also send ^C
       }
@@ -324,7 +310,6 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
     return () => {
       cancelAnimationFrame(raf)
-      clearTimeout(copiedTimerRef.current)
       observer.disconnect()
       inputSub.dispose()
       titleSub.dispose()
@@ -499,7 +484,6 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
           ↓
         </button>
       )}
-      {copied && <div className="copied-flash">Copied ✓</div>}
       <div ref={hostRef} className="terminal-xterm" />
       {props.kind === 'claude' && !!props.quickPrompts?.length && (
         // docked under claude's input box (always rendered, so the terminal never resizes on

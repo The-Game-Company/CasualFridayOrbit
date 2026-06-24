@@ -1253,41 +1253,6 @@ body {
   white-space: nowrap;
   font-weight: 500;
 }
-/* brief "Copied ✓" confirmation, shown when a selection is written to the clipboard */
-.copied-flash {
-  position: absolute;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 6;
-  pointer-events: none;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-2) 90%, var(--accent));
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
-  color: var(--fg-strong);
-  font-size: 13px;
-  font-weight: 600;
-  zoom: var(--window-ui-scale, 1);
-  animation: copied-fade 1.1s ease forwards;
-}
-@keyframes copied-fade {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, 4px);
-  }
-  15% {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-  70% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-  }
-}
 /* floating "jump back to the live bottom" arrow — only rendered while scrolled up */
 .scroll-bottom {
   position: absolute;
