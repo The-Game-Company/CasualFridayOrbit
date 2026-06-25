@@ -33,6 +33,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
   {
     title: 'App',
     items: [
+      [['Ctrl', '+/−'], 'Grow / shrink the global UI size (or Ctrl + scroll)'],
       [['Ctrl', ','], 'Settings'],
       [['Ctrl', 'H'], 'History'],
       [['Ctrl', '/'], 'This shortcuts list']

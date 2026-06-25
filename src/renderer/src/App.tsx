@@ -1404,6 +1404,17 @@ export default function App(): JSX.Element {
     dropTab(tabId)
   }
 
+  // Step the global UI zoom (webFrame zoom factor, persisted as config.uiScale). Shared by
+  // Ctrl+=/Ctrl+- and Ctrl+wheel. Clamped to the Settings "Global UI size" range: 80%–200%, 5% steps.
+  const nudgeZoom = useCallback((dir: number): void => {
+    const cfg = configRef.current
+    if (!cfg) return
+    const uiScale = Math.min(2, Math.max(0.8, Math.round(((cfg.uiScale || 1) + dir * 0.05) * 100) / 100))
+    const next = { ...cfg, uiScale }
+    setConfig(next)
+    window.orbit.setConfig(next)
+  }, [])
+
   // keyboard:
   //   • Ctrl+\           split the active tab with a new Claude window
   //   • Ctrl+W           close the active window (and its tab if it was the last window)
@@ -1411,6 +1422,7 @@ export default function App(): JSX.Element {
   //   • Ctrl+(Shift+)Tab next/previous tab of the active project (cycles)
   //   • Ctrl+1..9        focus the Nth tab of the active project (by position)
   //   • Ctrl+Shift+↑/↓   move to the previous/next project (and focus/open it)
+  //   • Ctrl+= / Ctrl+-  grow/shrink the global UI zoom (uiScale)
   useEffect(() => {
     // Capture phase: xterm consumes Ctrl+key combos (sends them to the PTY) before they reach
     // a bubble-phase window listener, so we must intercept here and stop propagation when we act.
@@ -1420,6 +1432,16 @@ export default function App(): JSX.Element {
       const grab = (): void => {
         e.preventDefault()
         e.stopPropagation()
+      }
+
+      // Ctrl+= / Ctrl++ bigger, Ctrl+- smaller → step the global UI zoom (same as Ctrl+wheel).
+      // (= is the unshifted +; NumpadAdd/Subtract too.)
+      const zoomIn = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd'
+      const zoomOut = e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract'
+      if (zoomIn || zoomOut) {
+        grab()
+        nudgeZoom(zoomIn ? 1 : -1)
+        return
       }
 
       if (!e.shiftKey && (e.code === 'Backslash' || e.key === '\\')) {
@@ -1516,6 +1538,20 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject, sessions, projects, tabs, activeTabId, visibleProjectsFlat, resizeSplit])
+
+  // Ctrl + mouse wheel → zoom the whole UI (same step as Ctrl+=/-). passive:false + preventDefault
+  // so Chromium's own ctrl-wheel zoom doesn't also fire and desync from config.uiScale.
+  // ponytail: 5% per wheel event — right for a mouse notch; a trackpad pinch (many events) zooms fast.
+  useEffect(() => {
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.deltaY === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      nudgeZoom(e.deltaY < 0 ? 1 : -1)
+    }
+    window.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    return () => window.removeEventListener('wheel', onWheel, { capture: true })
+  }, [nudgeZoom])
 
   // keyboard: Alt+Arrows move between open windows, spatially.
   //   • within the active tab's tiled grid, move to the neighbouring window in that direction
