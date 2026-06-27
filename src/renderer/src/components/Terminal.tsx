@@ -71,6 +71,15 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   const [pinnedText, setPinnedText] = useState<string | null>(null)
   // true while the viewport is scrolled up off the live bottom — shows the ↓ jump button
   const [scrolledUp, setScrolledUp] = useState(false)
+  // brief "Copied ✓" confirmation flash, shown when an xterm-side selection hits the clipboard
+  // (Claude's own copies show its native "Copied" indicator, so we don't double up on those)
+  const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<number>(0)
+  const flashCopied = useCallback((): void => {
+    setCopied(true)
+    clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1100)
+  }, [])
   // latest onTitle, so the once-only create effect always calls the current callback
   const onTitleRef = useRef(props.onTitle)
   onTitleRef.current = props.onTitle
@@ -218,6 +227,34 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
     const inputSub = term.onData((d) => window.orbit.sessionInput(props.sessionId, d))
     const titleSub = term.onTitleChange((t) => onTitleRef.current?.(t))
 
+    // Claude copies the selection by emitting OSC 52 (`ESC ] 52 ; c ; <base64> BEL`) — that's the
+    // "Copied" you see in its UI. xterm has no built-in OSC 52 handler, so without this it drops
+    // the sequence and nothing ever reaches the OS clipboard. Wire it up so Claude's own
+    // select-and-copy (and its wheel-scroll, which rides the same mouse mode we leave enabled)
+    // works. data is "<target>;<base64>"; the payload is base64 of UTF-8 bytes.
+    const oscSub = term.parser.registerOscHandler(52, (data) => {
+      const b64 = data.slice(data.indexOf(';') + 1)
+      if (!b64 || b64 === '?') return true // a clipboard *read* query — we don't expose it
+      try {
+        const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
+        if (text) window.orbit.clipboardWriteText(text)
+      } catch {
+        /* malformed base64 — ignore */
+      }
+      return true
+    })
+
+    // For selecting arbitrary on-screen text (not just what Claude offers): Claude owns the mouse,
+    // so a local xterm selection needs Shift+drag. When one lands, copy it and flash "Copied ✓".
+    // Empty selections (a plain click that clears) are ignored so a click never wipes the clipboard.
+    const selectionSub = term.onSelectionChange(() => {
+      const sel = term.getSelection()
+      if (sel) {
+        window.orbit.clipboardWriteText(sel)
+        flashCopied()
+      }
+    })
+
     // Copy / paste are wired explicitly. With the WebGL renderer xterm draws to a canvas, so
     // there's no DOM selection for the OS to copy, and we deliberately keep the app menu from
     // grabbing Ctrl+C / Ctrl+V (those belong to the terminal). Conventions match Windows
@@ -246,7 +283,10 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
       if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'c' && (e.shiftKey || term.hasSelection())) {
         const sel = term.getSelection()
-        if (sel) window.orbit.clipboardWriteText(sel)
+        if (sel) {
+          window.orbit.clipboardWriteText(sel)
+          flashCopied()
+        }
         e.preventDefault()
         return false // copied — don't also send ^C
       }
@@ -286,9 +326,12 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
 
     return () => {
       cancelAnimationFrame(raf)
+      clearTimeout(copiedTimerRef.current)
       observer.disconnect()
       inputSub.dispose()
       titleSub.dispose()
+      oscSub.dispose()
+      selectionSub.dispose()
       scrollSub.dispose()
       writeSub.dispose()
       for (const p of promptsRef.current) p.marker.dispose()
@@ -457,6 +500,7 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
           ↓
         </button>
       )}
+      {copied && <div className="copied-flash">Copied ✓</div>}
       <div ref={hostRef} className="terminal-xterm" />
       {props.kind === 'claude' && !!props.quickPrompts?.length && (
         // docked under claude's input box (always rendered, so the terminal never resizes on
