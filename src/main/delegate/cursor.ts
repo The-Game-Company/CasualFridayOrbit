@@ -72,15 +72,15 @@ export function cursorAgentAvailable(): boolean {
   return resolveCursorAgent() !== null
 }
 
-/** Render the portable context into a readable transcript a CLI agent can consume from a file. */
+/** Render the portable context as a readable chat transcript (User:/Assistant: turns). */
 function contextToText(ctx: PortableContext): string {
   if (!ctx.messages.length) return ''
-  const out: string[] = ['# Prior conversation (for context)\n']
-  for (const m of ctx.messages) {
-    const body = m.parts.map((p) => (p.type === 'text' ? p.text : '[image]')).join('\n')
-    out.push(`## ${m.role}\n${body}\n`)
-  }
-  return out.join('\n')
+  return ctx.messages
+    .map((m) => {
+      const body = m.parts.map((p) => (p.type === 'text' ? p.text : '[image]')).join('\n')
+      return `${m.role === 'user' ? 'User' : 'Assistant'}: ${body}`
+    })
+    .join('\n\n')
 }
 
 /** Pull the text out of a cursor-agent assistant/result event's message.content. */
@@ -104,13 +104,19 @@ export async function streamCursor(args: StreamArgs): Promise<string> {
   let promptArg = args.prompt
   try {
     const ctx = contextToText(args.context)
-    const body = `# Task\n\n${args.prompt}\n${ctx ? `\n# Prior conversation (context)\n\n${ctx}\n` : ''}`
+    const body =
+      'You are joining an ongoing conversation as a participant (brought in via Orbit to answer the ' +
+      'latest message). Below is the chat so far, then the latest message addressed to you. Reply to ' +
+      'that latest message directly and continue the conversation naturally — do NOT review or ' +
+      'summarize this as a document, just respond as if you are in the chat.\n\n' +
+      (ctx ? `===== CONVERSATION SO FAR =====\n${ctx}\n\n` : '') +
+      `===== LATEST MESSAGE TO YOU =====\n${args.prompt}\n`
     fs.writeFileSync(taskFile, body, 'utf8')
     wroteFile = true
     promptArg =
-      `Read the file "${taskFile}". It contains a "# Task" to complete` +
-      (args.context.messages.length ? ' plus a "# Prior conversation (context)" section for background' : '') +
-      '. Do the task and reply with your answer.'
+      `Continue our conversation. The full chat history and my latest message are in the file ` +
+      `"${taskFile}". Read it, then reply to my latest message as a participant in the chat — ` +
+      `don't summarize the file, just respond directly.`
   } catch {
     promptArg = args.prompt // best-effort fallback: inline prompt
   }

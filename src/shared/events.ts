@@ -295,6 +295,9 @@ export interface DelegateSendArgs {
   model: string
   /** the user's prompt to send to the external model */
   prompt: string
+  /** prior delegated turns this session (so the model sees the running side-conversation). Held in
+   *  the UI, not the transcript — delegate turns are merged into Claude on demand, not forged in. */
+  history?: { prompt: string; answer: string }[]
 }
 
 /** A streamed token chunk from a delegated turn. */
@@ -308,14 +311,11 @@ export interface DelegateToken {
 export interface DelegateDone {
   turnId: string
   sessionId: string
-  /** the full answer text (for the collapsed chip / feed item) */
+  /** the full answer text (recorded in the in-session thread) */
   text: string
-  /** set only when a fresh transcript was created (start-of-chat delegation) — the renderer adopts
-   *  it as the session's resumeId so the next claude launch resumes this conversation */
-  newResumeId?: string
 }
 
-/** Terminal event for a delegated turn that failed (nothing was written to the transcript). */
+/** Terminal event for a delegated turn that failed. */
 export interface DelegateError {
   turnId: string
   sessionId: string

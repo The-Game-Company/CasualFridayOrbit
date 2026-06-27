@@ -641,36 +641,40 @@ export default function App(): JSX.Element {
     })
   }, [config?.delegateEnabled, config?.delegateModels, delegateAvail])
 
-  // Change a chat's target model. Switching back to Claude on a chat that took a delegated turn
-  // out-of-band reloads claude (--resume) so it picks up the forged turn from the transcript (2A).
+  // Change a chat's target model — just routes where the next prompt goes ('claude' = native).
   const onSessionModelChange = useCallback(
-    (id: string, model: string) => {
-      updateSession(id, (s) => ({ ...s, selectedModel: model }))
-      if (model === 'claude') {
-        const s = sessionsRef.current.find((x) => x.id === id)
-        if (s?.delegateStale) {
-          handles.current.get(id)?.refresh()
-          updateSession(id, (x) => ({ ...x, delegateStale: false }))
-        }
-      }
-    },
+    (id: string, model: string) => updateSession(id, (s) => ({ ...s, selectedModel: model })),
     [updateSession]
   )
 
-  // A delegated turn finished + was written to the transcript: mark the live claude stale (so the
-  // next switch-to-Claude reconciles via --resume), adopt a freshly-created transcript id (start-
-  // of-chat case), and drop a marker into the activity feed.
+  // A delegated turn finished: mark the chat as having unmerged delegate turns (shows the "Return
+  // to Claude" button) and drop a marker into the activity feed.
   const onDelegateComplete = useCallback(
-    (id: string, label: string, newResumeId?: string) => {
+    (id: string, label: string) => {
       updateSession(id, (s) => ({
         ...s,
         delegateStale: true,
-        resumeId: newResumeId ?? s.resumeId,
         activity: [
           { id: Date.now(), ts: Date.now(), kind: 'agent' as const, icon: '↪', label: 'Delegate', detail: label },
           ...s.activity
         ].slice(0, 300)
       }))
+    },
+    [updateSession]
+  )
+
+  // Fold the delegate side-conversation into the live Claude: type the exchange in as a real user
+  // message (Claude sees it natively + it persists in Claude's own transcript), and switch back to
+  // native. Robust by construction — no transcript forging, no resume-leaf branching to fight.
+  const onReturnToClaude = useCallback(
+    (id: string, text: string) => {
+      updateSession(id, (s) => ({ ...s, selectedModel: 'claude', delegateStale: false }))
+      const h = handles.current.get(id)
+      if (h) {
+        h.paste(text)
+        setTimeout(() => window.orbit.sessionInput(id, '\r'), 180)
+        h.focus()
+      }
     },
     [updateSession]
   )
@@ -2069,7 +2073,8 @@ export default function App(): JSX.Element {
                           session={s}
                           availableModels={delegateModels}
                           onModelChange={(model) => onSessionModelChange(s.id, model)}
-                          onComplete={(label, newResumeId) => onDelegateComplete(s.id, label, newResumeId)}
+                          onComplete={(label) => onDelegateComplete(s.id, label)}
+                          onMerge={(text) => onReturnToClaude(s.id, text)}
                         />
                       ) : undefined
                     }

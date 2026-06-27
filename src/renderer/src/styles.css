@@ -4224,12 +4224,23 @@ body {
   font-size: 13px;
   cursor: pointer;
 }
-.delegate-stale {
-  font-size: 11.5px;
-  color: var(--amber);
-  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+.delegate-merge {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 3px 12px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-3));
+  border: 1px solid var(--accent);
   border-radius: 999px;
-  padding: 1px 9px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.delegate-merge:hover {
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg-3));
+  color: var(--fg-strong);
 }
 .delegate-compose {
   display: flex;
@@ -4274,18 +4285,57 @@ body {
   border: 1px solid var(--red);
   color: var(--red);
 }
-.delegate-stream {
-  max-height: 200px;
+/* The running thread of this session's delegated turns + the live streaming one. */
+.delegate-thread {
+  max-height: 260px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 8px 10px;
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+.delegate-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.delegate-msg.live {
+  border-left-color: var(--accent);
+}
+.delegate-q {
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.delegate-a {
   color: var(--fg);
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.delegate-working {
+  color: var(--fg-dim);
+  font-style: italic;
+}
+.delegate-spinner {
+  color: var(--accent);
+  animation: delegate-pulse 1s ease-in-out infinite;
+}
+@keyframes delegate-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .delegate-caret {
   color: var(--accent);

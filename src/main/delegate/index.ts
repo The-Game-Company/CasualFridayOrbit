@@ -1,6 +1,5 @@
 import type { DelegateSendArgs, DelegateStatuses } from '../../shared/events'
 import { buildContext } from './transcript-read'
-import { appendDelegateTurn, createDelegateTranscript } from './transcript-write'
 import { streamCompletion, IMPLEMENTED } from './providers'
 import { cursorAgentAvailable } from './cursor'
 import { availability, getKey } from '../provider-keys'
@@ -35,7 +34,7 @@ export function delegateStatuses(): DelegateStatuses {
 
 export interface DelegateCallbacks {
   onToken: (chunk: string) => void
-  onDone: (text: string, newResumeId?: string) => void
+  onDone: (text: string) => void
   onError: (message: string) => void
 }
 
@@ -58,7 +57,15 @@ export async function runDelegate(args: DelegateSendArgs, cb: DelegateCallbacks)
   const ac = new AbortController()
   inflight.set(args.turnId, ac)
   try {
+    // Context = the native Claude conversation so far (from its transcript) + this session's prior
+    // delegated turns (held in the UI, passed in). We do NOT write to Claude's transcript here —
+    // delegate turns are folded into Claude on demand by injecting them as a real user message
+    // (see the renderer's "Return to Claude"), which avoids fighting Claude's resume-leaf tracking.
     const context = buildContext(args.cwd, args.resumeId || '')
+    for (const h of args.history ?? []) {
+      context.messages.push({ role: 'user', parts: [{ type: 'text', text: h.prompt }] })
+      context.messages.push({ role: 'assistant', parts: [{ type: 'text', text: h.answer }] })
+    }
     const answer = await streamCompletion({
       provider: args.provider,
       model: args.model,
@@ -73,28 +80,7 @@ export async function runDelegate(args: DelegateSendArgs, cb: DelegateCallbacks)
       cb.onError('The model returned an empty response.')
       return
     }
-
-    const turn = { provider: args.provider, model: args.model, prompt: args.prompt, answer }
-    // Append to the existing transcript when we have one; otherwise (or if it's vanished) seed a
-    // fresh transcript and hand its id back so the renderer adopts it as the session's resumeId.
-    if (args.resumeId) {
-      const r = appendDelegateTurn(args.cwd, args.resumeId, turn)
-      if (r.ok) {
-        cb.onDone(answer)
-        return
-      }
-      if (r.error !== 'transcript not found') {
-        cb.onError(r.error || 'Failed to write the turn to the transcript.')
-        return
-      }
-      // fall through: resumeId pointed at no transcript yet — create one
-    }
-    const newId = createDelegateTranscript(args.cwd, turn)
-    if (!newId) {
-      cb.onError('Failed to create the conversation transcript.')
-      return
-    }
-    cb.onDone(answer, newId)
+    cb.onDone(answer)
   } catch (e: any) {
     if (e?.name === 'AbortError') cb.onError('Canceled.')
     else cb.onError(e?.message ? String(e.message) : 'Delegate request failed.')

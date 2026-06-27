@@ -4,28 +4,36 @@ import type { SessionState } from '../session-model'
 
 interface Props {
   session: SessionState
-  /** delegate models the dropdown may offer (only providers with a key + a working client) */
+  /** delegate models the dropdown may offer; not-ready ones appear disabled to nudge to Settings */
   availableModels: DelegateModelInfo[]
-  /** change the chat's target model. 'claude' = native; App reconciles a stale chat on switch-back. */
+  /** change the chat's target model. 'claude' = native (just switches where the next prompt goes). */
   onModelChange: (model: string) => void
-  /** a delegated turn finished and was written to the transcript: App marks the chat stale +
-   *  adopts a freshly-created transcript id (start-of-chat case). */
-  onComplete: (label: string, newResumeId?: string) => void
+  /** a delegated turn finished: App marks the chat as having unmerged delegate turns. */
+  onComplete: (label: string) => void
+  /** fold the delegate exchange back into Claude: types `text` into the live claude as a user turn. */
+  onMerge: (text: string) => void
+}
+
+interface ThreadTurn {
+  prompt: string
+  answer: string
+  model: string
 }
 
 /**
- * Per-chat control docked under a Claude window: a model dropdown (default "Claude (native)")
- * plus, when a non-Claude model is picked, a slim prompt input and a live streaming strip. The
- * answer streams here, then folds into the conversation transcript; the terminal repaints it
- * inline on the next --resume (when the user switches back to Claude). Kept compact so up to four
- * of these can sit side-by-side without crowding the screen.
+ * Per-chat control docked under a Claude window: a model dropdown (default "Claude (native)") plus,
+ * when a non-Claude model is picked, a prompt box, a live "working/streaming" view, and the running
+ * thread of this session's delegated turns (so you can see the back-and-forth is retained). A
+ * "Return to Claude" button folds everything back into the native chat via --resume.
  */
-export function DelegateBar({ session, availableModels, onModelChange, onComplete }: Props): JSX.Element | null {
+export function DelegateBar({ session, availableModels, onModelChange, onComplete, onMerge }: Props): JSX.Element | null {
   const [prompt, setPrompt] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [thread, setThread] = useState<ThreadTurn[]>([])
   const turnIdRef = useRef<string | null>(null)
+  const pendingPromptRef = useRef('')
   const streamBoxRef = useRef<HTMLDivElement>(null)
 
   const selected = session.selectedModel || 'claude'
@@ -33,7 +41,6 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
   // a delegate turn is only possible on a *ready* provider; not-ready selections just show a hint
   const isDelegate = selected !== 'claude' && !!current?.ready
 
-  // Stream subscriptions: filter to this session + the in-flight turn.
   useEffect(() => {
     const offToken = window.orbit.onDelegateToken((t) => {
       if (t.sessionId !== session.id || t.turnId !== turnIdRef.current) return
@@ -43,8 +50,9 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
       if (d.sessionId !== session.id || d.turnId !== turnIdRef.current) return
       turnIdRef.current = null
       setStreaming(false)
-      setStreamText(d.text)
-      onComplete(current?.label ?? selected, d.newResumeId)
+      setStreamText('')
+      setThread((prev) => [...prev, { prompt: pendingPromptRef.current, answer: d.text, model: current?.label ?? selected }])
+      onComplete(current?.label ?? selected)
     })
     const offErr = window.orbit.onDelegateError((d) => {
       if (d.sessionId !== session.id || d.turnId !== turnIdRef.current) return
@@ -60,19 +68,20 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, current?.label, selected])
 
-  // Keep the streaming box pinned to the latest tokens.
+  // keep the live view + thread pinned to the latest content
   useEffect(() => {
     const el = streamBoxRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [streamText])
+  }, [streamText, thread.length])
 
   if (!availableModels.length) return null
 
   const send = (): void => {
     const text = prompt.trim()
-    if (!text || streaming || !current) return
+    if (!text || streaming || !current?.ready) return
     const turnId = crypto.randomUUID()
     turnIdRef.current = turnId
+    pendingPromptRef.current = text
     setError(null)
     setStreamText('')
     setStreaming(true)
@@ -83,7 +92,8 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
       resumeId: session.resumeId,
       provider: current.provider,
       model: current.model,
-      prompt: text
+      prompt: text,
+      history: thread.map((t) => ({ prompt: t.prompt, answer: t.answer }))
     })
     setPrompt('')
   }
@@ -92,6 +102,23 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
     if (turnIdRef.current) window.orbit.delegateCancel(turnIdRef.current)
     turnIdRef.current = null
     setStreaming(false)
+  }
+
+  // Fold the side-conversation back into Claude: a single user message Claude reads + continues from.
+  const returnToClaude = (): void => {
+    if (thread.length) {
+      const blocks = thread.map(
+        (t) => `**Me → ${t.model}:**\n${t.prompt}\n\n**${t.model}:**\n${t.answer}`
+      )
+      onMerge(
+        'While you were paused I consulted external model(s) via Orbit. Here is the full exchange — ' +
+          'please read it and continue our work with it in mind:\n\n' +
+          blocks.join('\n\n———\n\n')
+      )
+    } else {
+      onModelChange('claude')
+    }
+    setThread([])
   }
 
   return (
@@ -111,52 +138,76 @@ export function DelegateBar({ session, availableModels, onModelChange, onComplet
             </option>
           ))}
         </select>
-        {session.delegateStale && selected !== 'claude' && (
-          <span className="delegate-stale" title="Switch to Claude (native) to fold these turns back into the chat">
-            pending merge
-          </span>
+        {/* Unmerged delegate turns exist → offer to fold them back into the native Claude chat. */}
+        {session.delegateStale && (
+          <button
+            className="delegate-merge"
+            onClick={returnToClaude}
+            title="Send this whole exchange into Claude as a message, so it continues with full context"
+          >
+            ⤺ Return to Claude{thread.length ? ` (${thread.length})` : ''}
+          </button>
         )}
       </div>
 
       {isDelegate && (
-        <div className="delegate-compose">
-          <textarea
-            className="delegate-input"
-            rows={1}
-            placeholder={`Ask ${current?.label ?? 'the model'}…`}
-            value={prompt}
-            disabled={streaming}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                send()
-              }
-            }}
-          />
-          {streaming ? (
-            <button className="delegate-btn cancel" onClick={cancel}>
-              Stop
-            </button>
-          ) : (
-            <button className="delegate-btn" onClick={send} disabled={!prompt.trim()}>
-              Send
-            </button>
+        <>
+          {/* The session's delegated Q&A so far — makes the retained back-and-forth visible. */}
+          {(thread.length > 0 || streaming || error) && (
+            <div className="delegate-thread" ref={streamBoxRef}>
+              {thread.map((t, i) => (
+                <div key={i} className="delegate-msg">
+                  <div className="delegate-q">❯ {t.prompt}</div>
+                  <div className="delegate-a">{t.answer}</div>
+                </div>
+              ))}
+              {streaming && (
+                <div className="delegate-msg live">
+                  <div className="delegate-q">❯ {pendingPromptRef.current}</div>
+                  <div className="delegate-a">
+                    {streamText ? (
+                      <>
+                        {streamText}
+                        <span className="delegate-caret">▋</span>
+                      </>
+                    ) : (
+                      <span className="delegate-working">
+                        <span className="delegate-spinner">●</span> {current?.label ?? 'model'} is working…
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {error && <div className="delegate-error">⚠ {error}</div>}
+            </div>
           )}
-        </div>
-      )}
 
-      {isDelegate && (streaming || streamText || error) && (
-        <div className="delegate-stream" ref={streamBoxRef}>
-          {error ? (
-            <span className="delegate-error">⚠ {error}</span>
-          ) : (
-            <>
-              {streamText}
-              {streaming && <span className="delegate-caret">▋</span>}
-            </>
-          )}
-        </div>
+          <div className="delegate-compose">
+            <textarea
+              className="delegate-input"
+              rows={1}
+              placeholder={`Ask ${current?.label ?? 'the model'}…`}
+              value={prompt}
+              disabled={streaming}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  send()
+                }
+              }}
+            />
+            {streaming ? (
+              <button className="delegate-btn cancel" onClick={cancel}>
+                Stop
+              </button>
+            ) : (
+              <button className="delegate-btn" onClick={send} disabled={!prompt.trim()}>
+                Send
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   )

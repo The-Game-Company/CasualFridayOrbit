@@ -468,8 +468,7 @@ function registerIpc(): void {
   ipcMain.on(IPC.DelegateSend, (_e, args: DelegateSendArgs) => {
     void runDelegate(args, {
       onToken: (chunk) => send(IPC.DelegateToken, { turnId: args.turnId, sessionId: args.sessionId, chunk }),
-      onDone: (text, newResumeId) =>
-        send(IPC.DelegateDone, { turnId: args.turnId, sessionId: args.sessionId, text, newResumeId }),
+      onDone: (text) => send(IPC.DelegateDone, { turnId: args.turnId, sessionId: args.sessionId, text }),
       onError: (message) => send(IPC.DelegateError, { turnId: args.turnId, sessionId: args.sessionId, message })
     })
   })
