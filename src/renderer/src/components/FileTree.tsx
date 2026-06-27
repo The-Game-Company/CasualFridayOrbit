@@ -91,12 +91,31 @@ interface NodeProps {
   gitChanged: Set<string>
   isLeased: (path: string) => boolean
   onOpenFile: (path: string) => void
+  revealPath?: string | null
 }
 
-function Node({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile }: NodeProps): JSX.Element {
+function Node({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile, revealPath }: NodeProps): JSX.Element {
   const [open, setOpen] = useState(false)
   const [children, setChildren] = useState<FileNode[] | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const pad = { paddingLeft: 8 + depth * 12 }
+  const selfRef = useRef<HTMLDivElement>(null)
+
+  const isAncestor = revealPath != null && revealPath !== node.path && (revealPath.startsWith(node.path + '/') || revealPath.startsWith(node.path + '\\'))
+  const isTarget = revealPath === node.path
+
+  useEffect(() => {
+    if (isAncestor && !open) {
+      setOpen(true)
+      if (children === null) window.orbit.readDir(node.path).then(setChildren)
+    }
+  }, [isAncestor])
+
+  useEffect(() => {
+    if (isTarget && selfRef.current) {
+      selfRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [isTarget])
 
   const toggle = (): void => {
     const next = !open
@@ -104,16 +123,32 @@ function Node({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile }: N
     if (next && children === null) window.orbit.readDir(node.path).then(setChildren)
   }
 
+  const contextMenu = menu && (
+    <>
+      <div className="context-menu-backdrop" onClick={() => setMenu(null)} />
+      <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+        <div className="dropdown-item" onClick={() => { setMenu(null); void window.orbit.openInExplorer(node.path) }}>Open in Folder</div>
+      </div>
+    </>
+  )
+
   if (node.type === 'dir') {
     return (
       <>
-        <div className="ctx-row dir" style={pad} onClick={toggle}>
+        <div
+          ref={isTarget ? selfRef : undefined}
+          className={`ctx-row dir${isTarget ? ' ft-reveal-target' : ''}`}
+          style={pad}
+          onClick={toggle}
+          onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
+        >
           <span className="ctx-caret">{open ? '▾' : '▸'}</span>
           {node.name}
         </div>
+        {contextMenu}
         {open &&
           children?.map((c) => (
-            <Node key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} />
+            <Node key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} revealPath={revealPath} />
           ))}
         {open && children?.length === 0 && (
           <div className="ctx-row muted" style={{ paddingLeft: 8 + (depth + 1) * 12 }}>
@@ -128,18 +163,23 @@ function Node({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile }: N
   const isGitChanged = gitChanged.has(node.path)
   const leased = isLeased(node.path)
   return (
-    <div
-      className={`ctx-row file ${isBusy ? 'busy' : ''} ${isRecent ? 'recent' : ''} ${isGitChanged ? 'git-changed' : ''}`}
-      style={pad}
-      draggable
-      onDragStart={(e) => startPathDrag(e, node.path)}
-      onClick={() => onOpenFile(node.path)}
-      title={leased ? `${node.path} — leased by another agent` : node.path}
-    >
-      <span className="ctx-icon">{isBusy ? '✱' : fileIcon(node.name)}</span>
-      {node.name}
-      {leased && <span className="ctx-lock" title="held by an agent lease">🔒</span>}
-    </div>
+    <>
+      <div
+        ref={isTarget ? selfRef : undefined}
+        className={`ctx-row file ${isBusy ? 'busy' : ''} ${isRecent ? 'recent' : ''} ${isGitChanged ? 'git-changed' : ''}${isTarget ? ' ft-reveal-target' : ''}`}
+        style={pad}
+        draggable
+        onDragStart={(e) => startPathDrag(e, node.path)}
+        onClick={() => onOpenFile(node.path)}
+        onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
+        title={leased ? `${node.path} — leased by another agent` : node.path}
+      >
+        <span className="ctx-icon">{isBusy ? '✱' : fileIcon(node.name)}</span>
+        {node.name}
+        {leased && <span className="ctx-lock" title="held by an agent lease">🔒</span>}
+      </div>
+      {contextMenu}
+    </>
   )
 }
 
@@ -188,6 +228,7 @@ interface SearchNodeProps {
   gitChanged: Set<string>
   isLeased: (path: string) => boolean
   onOpenFile: (path: string) => void
+  onGoTo: (path: string) => void
   terms: string[]
   highlightRe: RegExp | null
   // Collapse state is owned by the FileTree container (not local useState) so it survives the
@@ -196,8 +237,9 @@ interface SearchNodeProps {
   onToggle: (path: string) => void
 }
 
-function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile, terms, highlightRe, collapsed, onToggle }: SearchNodeProps): JSX.Element {
+function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile, onGoTo, terms, highlightRe, collapsed, onToggle }: SearchNodeProps): JSX.Element {
   const pad = { paddingLeft: 8 + depth * 12 }
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
   if (node.type === 'dir') {
     const open = !collapsed.has(node.path)
@@ -209,7 +251,7 @@ function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFil
         </div>
         {open &&
           node.children.map((c) => (
-            <SearchNode key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} terms={terms} highlightRe={highlightRe} collapsed={collapsed} onToggle={onToggle} />
+            <SearchNode key={c.path} node={c} depth={depth + 1} busy={busy} recent={recent} gitChanged={gitChanged} isLeased={isLeased} onOpenFile={onOpenFile} onGoTo={onGoTo} terms={terms} highlightRe={highlightRe} collapsed={collapsed} onToggle={onToggle} />
           ))}
       </>
     )
@@ -220,18 +262,30 @@ function SearchNode({ node, depth, busy, recent, gitChanged, isLeased, onOpenFil
   const isGitChanged = gitChanged.has(node.path)
   const leased = isLeased(node.path)
   return (
-    <div
-      className={`ctx-row file ${isBusy ? 'busy' : ''} ${isRecent ? 'recent' : ''} ${isGitChanged ? 'git-changed' : ''}`}
-      style={pad}
-      draggable
-      onDragStart={(e) => startPathDrag(e, node.path)}
-      onClick={() => onOpenFile(node.path)}
-      title={leased ? `${node.path} — leased by another agent` : node.path}
-    >
-      <span className="ctx-icon">{isBusy ? '✱' : fileIcon(node.name)}</span>
-      {highlightName(node.name, terms, highlightRe)}
-      {leased && <span className="ctx-lock" title="held by an agent lease">🔒</span>}
-    </div>
+    <>
+      <div
+        className={`ctx-row file ${isBusy ? 'busy' : ''} ${isRecent ? 'recent' : ''} ${isGitChanged ? 'git-changed' : ''}`}
+        style={pad}
+        draggable
+        onDragStart={(e) => startPathDrag(e, node.path)}
+        onClick={() => onOpenFile(node.path)}
+        onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
+        title={leased ? `${node.path} — leased by another agent` : node.path}
+      >
+        <span className="ctx-icon">{isBusy ? '✱' : fileIcon(node.name)}</span>
+        {highlightName(node.name, terms, highlightRe)}
+        {leased && <span className="ctx-lock" title="held by an agent lease">🔒</span>}
+      </div>
+      {menu && (
+        <>
+          <div className="context-menu-backdrop" onClick={() => setMenu(null)} />
+          <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+            <div className="dropdown-item" onClick={() => { setMenu(null); onGoTo(node.path) }}>Go To in Tree</div>
+            <div className="dropdown-item" onClick={() => { setMenu(null); void window.orbit.openInExplorer(node.path) }}>Open in Folder</div>
+          </div>
+        </>
+      )}
+    </>
   )
 }
 
@@ -342,6 +396,7 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
   const [useRegex, setUseRegex] = useState(false)
   const [results, setResults] = useState<FileNode[] | null>(null)
   const [searching, setSearching] = useState(false)
+  const [revealPath, setRevealPath] = useState<string | null>(null)
   const [regexError, setRegexError] = useState(false)
   // Paths of directories the user has collapsed in the search-results tree. Owned here (not in
   // each SearchNode) so a collapse survives re-renders triggered by streaming agent activity.
@@ -378,6 +433,12 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
     setQuery('')
     if (root) window.orbit.readDir(root).then(setTop)
   }, [root])
+
+  useEffect(() => {
+    if (revealPath == null) return
+    const t = setTimeout(() => setRevealPath(null), 2000)
+    return () => clearTimeout(t)
+  }, [revealPath])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -516,6 +577,7 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
                 gitChanged={gitChanged}
                 isLeased={isLeased}
                 onOpenFile={onOpenFile}
+                onGoTo={(path) => { setQuery(''); setRevealPath(path) }}
                 terms={terms}
                 highlightRe={highlightRe}
                 collapsed={collapsed}
@@ -539,6 +601,7 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
                     gitChanged={gitChanged}
                     isLeased={isLeased}
                     onOpenFile={onOpenFile}
+                    revealPath={revealPath}
                   />
                 ))}
               </div>

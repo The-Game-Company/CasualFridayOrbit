@@ -784,6 +784,15 @@ body {
 .dropdown-item.disabled:hover {
   background: transparent;
 }
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.ft-reveal-target {
+  background: var(--accent-dim, rgba(99,179,237,0.18)) !important;
+  transition: background 1.5s ease-out;
+}
 .dropdown-separator {
   height: 1px;
   background: var(--line);
