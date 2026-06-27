@@ -277,17 +277,6 @@ function onHookEvent(evt: HookEvent): void {
 // (Dev convenience — the same flow launch.cmd does, but without leaving the app.)
 let rebuilding = false
 
-/** Map known electron-vite stage markers to milestone percentages. */
-function parseBuildPct(line: string): number | null {
-  if (/building main/i.test(line)) return 5
-  if (/✔.*main|main.*succeeded/i.test(line)) return 30
-  if (/building preload/i.test(line)) return 35
-  if (/✔.*preload|preload.*succeeded/i.test(line)) return 50
-  if (/building renderer/i.test(line)) return 55
-  if (/✔.*renderer|renderer.*succeeded/i.test(line)) return 90
-  return null
-}
-
 function rebuildAndRestart(): void {
   if (rebuilding) return
   rebuilding = true
@@ -296,6 +285,13 @@ function rebuildAndRestart(): void {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const proc = spawn(npm, ['run', 'build'], { cwd, shell: true })
   let log = ''
+  // electron-vite runs three sequential sub-builds: main → preload → renderer.
+  // Each prints "building for production" at the start and "built in X.Xs" at the end.
+  // We count occurrences to assign milestone percentages without relying on stage names.
+  let buildStarts = 0
+  let buildEnds = 0
+  const START_PCTS = [5, 35, 55]   // pct when nth sub-build begins
+  const END_PCTS   = [30, 50, 90]  // pct when nth sub-build finishes
   let lastPct = 2
 
   send(IPC.AppRebuildProgress, { line: 'Starting build…', pct: 2 })
@@ -306,7 +302,14 @@ function rebuildAndRestart(): void {
     for (const raw of text.split(/\r\n|\r|\n/)) {
       const line = raw.trim()
       if (!line) continue
-      const pct = parseBuildPct(line)
+      let pct: number | null = null
+      if (/building for production/i.test(line)) {
+        const idx = buildStarts++
+        pct = START_PCTS[idx] ?? null
+      } else if (/\bbuilt in\b/i.test(line)) {
+        const idx = buildEnds++
+        pct = END_PCTS[idx] ?? null
+      }
       if (pct != null && pct > lastPct) lastPct = pct
       send(IPC.AppRebuildProgress, { line, pct: lastPct })
     }
