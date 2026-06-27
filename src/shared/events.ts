@@ -380,6 +380,15 @@ export interface UpdateProgress {
   pct: number | null
 }
 
+/** A live progress tick streamed from npm run build during an in-app rebuild. */
+export interface RebuildProgress {
+  line: string
+  /** 0–100 normally; -1 signals a build failure */
+  pct: number
+  /** Full build output on failure (pct === -1). */
+  errorOutput?: string
+}
+
 /** A past claude conversation found on disk (a transcript). */
 export interface HistoryEntry {
   sessionId: string
@@ -470,6 +479,7 @@ export const IPC = {
   UpdateCloseExternal: 'update:closeExternal',
   AppRelaunch: 'app:relaunch',
   AppRebuild: 'app:rebuild',
+  AppRebuildProgress: 'app:rebuild:progress',
   ReadDir: 'files:readDir',
   SearchFiles: 'files:search',
   GitStatus: 'git:status',

@@ -491,6 +491,7 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
         >
           .*
         </button>
+        {searching && <div className="file-search-progress"><div className="file-search-progress-bar" /></div>}
       </div>
 
       <div className="ft-tree-body">

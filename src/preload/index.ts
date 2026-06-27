@@ -24,6 +24,7 @@ import {
   type ReadFileResult,
   type SaveResult,
   type Skill,
+  type RebuildProgress,
   type UpdateProgress,
   type UpdateResult,
   type UpdateStatus,
@@ -96,6 +97,11 @@ const api = {
   closeExternalClaude: (): Promise<number> => ipcRenderer.invoke(IPC.UpdateCloseExternal),
   relaunchApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.AppRelaunch),
   rebuildApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.AppRebuild),
+  onRebuildProgress: (cb: (p: RebuildProgress) => void): (() => void) => {
+    const fn = (_e: unknown, p: RebuildProgress): void => cb(p)
+    ipcRenderer.on(IPC.AppRebuildProgress, fn)
+    return () => ipcRenderer.removeListener(IPC.AppRebuildProgress, fn)
+  },
 
   // file browser + editor
   gitStatus: (projectPath: string): Promise<string[]> => ipcRenderer.invoke(IPC.GitStatus, projectPath),

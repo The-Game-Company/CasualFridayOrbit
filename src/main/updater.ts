@@ -159,10 +159,23 @@ export function runUpdate(onProgress?: (p: UpdateProgress) => void): Promise<Upd
   return new Promise((resolve) => {
     let buf = ''
     let lastPct: number | null = null
+    let lastLine = 'Upgrading…'
+    let fakePct = 0
     const tail = (): string => buf.slice(-4000)
 
     const child = spawn(cmd, args, { windowsHide: true })
     const timer = setTimeout(() => child.kill(), 300_000)
+
+    // For native installs, `claude update` rarely emits parseable percentages.
+    // Tick a fake progress so the bar moves instead of staying indeterminate.
+    let fakeTimer: ReturnType<typeof setInterval> | null = null
+    if (method === 'native') {
+      fakeTimer = setInterval(() => {
+        if (lastPct != null) { clearInterval(fakeTimer!); fakeTimer = null; return }
+        fakePct = Math.min(fakePct + 1, 88)
+        onProgress?.({ line: lastLine, pct: fakePct })
+      }, 1200)
+    }
 
     // winget redraws its progress line with \r; split on either so each redraw is its own "line"
     const onChunk = (chunk: Buffer): void => {
@@ -171,6 +184,7 @@ export function runUpdate(onProgress?: (p: UpdateProgress) => void): Promise<Upd
       for (const raw of text.split(/\r\n|\r|\n/)) {
         const line = raw.trim()
         if (!line) continue
+        lastLine = line
         const pct = parsePct(line)
         if (pct != null) lastPct = pct
         onProgress?.({ line, pct: pct ?? lastPct })
@@ -181,10 +195,12 @@ export function runUpdate(onProgress?: (p: UpdateProgress) => void): Promise<Upd
 
     child.on('error', (err) => {
       clearTimeout(timer)
+      if (fakeTimer) clearInterval(fakeTimer)
       resolve({ ok: false, output: tail() + '\n' + (err.message ?? String(err)) })
     })
     child.on('close', (code) => {
       clearTimeout(timer)
+      if (fakeTimer) clearInterval(fakeTimer)
       if (code === 0) onProgress?.({ line: 'Upgrade complete.', pct: 100 })
       resolve({ ok: code === 0, output: tail() })
     })

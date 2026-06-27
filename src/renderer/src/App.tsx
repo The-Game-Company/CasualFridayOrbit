@@ -13,6 +13,7 @@ import type {
   McpServer,
   Project,
   ProjectInfo,
+  RebuildProgress,
   Skill,
   TermKind,
   UpdateStatus,
@@ -32,6 +33,7 @@ import { HistoryModal } from './components/HistoryModal'
 import { ShortcutsModal } from './components/ShortcutsModal'
 import { ConfirmModal } from './components/ConfirmModal'
 import { UpdateModal } from './components/UpdateModal'
+import { RebuildModal } from './components/RebuildModal'
 import { ContextPanel } from './components/ContextPanel'
 import { FileTree } from './components/FileTree'
 import { startPathDrag } from './components/drag'
@@ -350,6 +352,9 @@ export default function App(): JSX.Element {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   // names of busy chats when a rebuild is requested mid-turn; non-null shows the confirm modal
   const [rebuildBusy, setRebuildBusy] = useState<string[] | null>(null)
+  // live rebuild progress; non-null shows the blocking rebuild overlay
+  const [rebuildProgress, setRebuildProgress] = useState<RebuildProgress | null>(null)
+  const rebuildUnsub = useRef<(() => void) | null>(null)
   // launch-time Claude Code upgrade gate (see the update-check effect below)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [updateOpen, setUpdateOpen] = useState(false)
@@ -1042,6 +1047,19 @@ export default function App(): JSX.Element {
   focusWindowRef.current = focusWindow
   useEffect(() => window.orbit.onNotifyActivate((id) => focusWindowRef.current(id)), [])
 
+  function triggerRebuild(): void {
+    rebuildUnsub.current?.()
+    rebuildUnsub.current = window.orbit.onRebuildProgress((p) => {
+      setRebuildProgress(p)
+      if (p.pct === -1) {
+        rebuildUnsub.current?.()
+        rebuildUnsub.current = null
+      }
+    })
+    setRebuildProgress({ line: 'Starting…', pct: 0 })
+    window.orbit.rebuildApp()
+  }
+
   // open Settings / History from the app menu (hidden bar — popped via the tab bar's ☰,
   // or driven directly by its accelerators)
   useEffect(() => {
@@ -1054,7 +1072,7 @@ export default function App(): JSX.Element {
         // native window.confirm, which is unstyled and yanks terminal focus).
         const busy = sessionsRef.current.filter((s) => s.status === 'busy')
         if (busy.length > 0) setRebuildBusy(busy.map((s) => s.projectName))
-        else window.orbit.rebuildApp()
+        else triggerRebuild()
       } else if (cmd === 'shortcuts') {
         setShortcutsOpen(true)
       } else if (cmd === 'history') {
@@ -2477,6 +2495,13 @@ export default function App(): JSX.Element {
 
       {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
 
+      {rebuildProgress && (
+        <RebuildModal
+          progress={rebuildProgress}
+          onDismiss={() => setRebuildProgress(null)}
+        />
+      )}
+
       {rebuildBusy && (
         <ConfirmModal
           title="Rebuild & Restart"
@@ -2484,7 +2509,7 @@ export default function App(): JSX.Element {
           danger
           onConfirm={() => {
             setRebuildBusy(null)
-            window.orbit.rebuildApp()
+            triggerRebuild()
           }}
           onCancel={() => {
             setRebuildBusy(null)

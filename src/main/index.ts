@@ -276,6 +276,18 @@ function onHookEvent(evt: HookEvent): void {
 // Rebuild Orbit from source, then relaunch the app on the freshly built `out/`.
 // (Dev convenience — the same flow launch.cmd does, but without leaving the app.)
 let rebuilding = false
+
+/** Map known electron-vite stage markers to milestone percentages. */
+function parseBuildPct(line: string): number | null {
+  if (/building main/i.test(line)) return 5
+  if (/✔.*main|main.*succeeded/i.test(line)) return 30
+  if (/building preload/i.test(line)) return 35
+  if (/✔.*preload|preload.*succeeded/i.test(line)) return 50
+  if (/building renderer/i.test(line)) return 55
+  if (/✔.*renderer|renderer.*succeeded/i.test(line)) return 90
+  return null
+}
+
 function rebuildAndRestart(): void {
   if (rebuilding) return
   rebuilding = true
@@ -284,22 +296,42 @@ function rebuildAndRestart(): void {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const proc = spawn(npm, ['run', 'build'], { cwd, shell: true })
   let log = ''
-  proc.stdout.on('data', (d) => (log += d))
-  proc.stderr.on('data', (d) => (log += d))
+  let lastPct = 2
+
+  send(IPC.AppRebuildProgress, { line: 'Starting build…', pct: 2 })
+
+  const onChunk = (d: Buffer): void => {
+    const text = d.toString()
+    log += text
+    for (const raw of text.split(/\r\n|\r|\n/)) {
+      const line = raw.trim()
+      if (!line) continue
+      const pct = parseBuildPct(line)
+      if (pct != null && pct > lastPct) lastPct = pct
+      send(IPC.AppRebuildProgress, { line, pct: lastPct })
+    }
+  }
+  proc.stdout.on('data', onChunk)
+  proc.stderr.on('data', onChunk)
+
   proc.on('close', (code) => {
     rebuilding = false
     if (code === 0) {
-      app.relaunch()
-      app.quit()
+      send(IPC.AppRebuildProgress, { line: 'Build complete. Relaunching…', pct: 100 })
+      setTimeout(() => { app.relaunch(); app.quit() }, 400)
     } else {
       win?.setTitle('Orbit')
-      dialog.showErrorBox('Orbit rebuild failed', log.slice(-4000) || `build exited with code ${code}`)
+      send(IPC.AppRebuildProgress, {
+        line: 'Build failed.',
+        pct: -1,
+        errorOutput: log.slice(-4000) || `build exited with code ${code}`
+      })
     }
   })
   proc.on('error', (err) => {
     rebuilding = false
     win?.setTitle('Orbit')
-    dialog.showErrorBox('Orbit rebuild failed', String(err))
+    send(IPC.AppRebuildProgress, { line: 'Build failed.', pct: -1, errorOutput: String(err) })
   })
 }
 
