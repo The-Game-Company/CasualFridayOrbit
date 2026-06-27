@@ -285,28 +285,38 @@ function rebuildAndRestart(): void {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const proc = spawn(npm, ['run', 'build'], { cwd, shell: true })
   let log = ''
-  // electron-vite runs three sequential sub-builds: main → preload → renderer.
-  // Each prints "building for production" at the start and "built in X.Xs" at the end.
-  // We count occurrences to assign milestone percentages without relying on stage names.
   let buildStarts = 0
   let buildEnds = 0
-  const START_PCTS = [5, 35, 55]   // pct when nth sub-build begins
-  const END_PCTS   = [30, 50, 90]  // pct when nth sub-build finishes
+  const START_PCTS = [5, 35, 55]
+  const END_PCTS = [30, 50, 90]
   let lastPct = 2
+  let lastLine = 'Building…'
 
   send(IPC.AppRebuildProgress, { line: 'Starting build…', pct: 2 })
+
+  // Tick forward steadily so the bar moves even when output is sparse or patterns don't match.
+  const ticker = setInterval(() => {
+    const next = Math.min(lastPct + 1, 88)
+    if (next > lastPct) {
+      lastPct = next
+      send(IPC.AppRebuildProgress, { line: lastLine, pct: lastPct })
+    }
+  }, 350)
+
+  const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*[mGKHFJABCDsu]/g, '')
 
   const onChunk = (d: Buffer): void => {
     const text = d.toString()
     log += text
     for (const raw of text.split(/\r\n|\r|\n/)) {
-      const line = raw.trim()
+      const line = stripAnsi(raw).trim()
       if (!line) continue
+      lastLine = line
       let pct: number | null = null
-      if (/building for production/i.test(line)) {
+      if (/building.*for production/i.test(line)) {
         const idx = buildStarts++
         pct = START_PCTS[idx] ?? null
-      } else if (/\bbuilt in\b/i.test(line)) {
+      } else if (/built in/i.test(line)) {
         const idx = buildEnds++
         pct = END_PCTS[idx] ?? null
       }
@@ -318,6 +328,7 @@ function rebuildAndRestart(): void {
   proc.stderr.on('data', onChunk)
 
   proc.on('close', (code) => {
+    clearInterval(ticker)
     rebuilding = false
     if (code === 0) {
       send(IPC.AppRebuildProgress, { line: 'Build complete. Relaunching…', pct: 100 })
@@ -332,6 +343,7 @@ function rebuildAndRestart(): void {
     }
   })
   proc.on('error', (err) => {
+    clearInterval(ticker)
     rebuilding = false
     win?.setTitle('Orbit')
     send(IPC.AppRebuildProgress, { line: 'Build failed.', pct: -1, errorOutput: String(err) })
