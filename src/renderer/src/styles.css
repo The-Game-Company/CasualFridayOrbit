@@ -1649,7 +1649,8 @@ body {
 .file-search-input.error {
   border-color: var(--red, #e05);
 }
-.file-search-regex {
+.file-search-regex,
+.file-search-follow {
   flex-shrink: 0;
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -1661,11 +1662,13 @@ body {
   cursor: pointer;
   line-height: 1;
 }
-.file-search-regex:hover {
+.file-search-regex:hover,
+.file-search-follow:hover {
   border-color: var(--fg-mute);
   color: var(--fg);
 }
-.file-search-regex.on {
+.file-search-regex.on,
+.file-search-follow.on {
   border-color: var(--accent);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);

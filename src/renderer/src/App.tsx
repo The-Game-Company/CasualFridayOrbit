@@ -2318,6 +2318,7 @@ export default function App(): JSX.Element {
                   getBusyAgent={getBusyAgent}
                   onOpenFile={openFile}
                   keyDocs={keyDocs}
+                  focusPath={activeFilePath}
                 />
               )}
               {rightView === 'coord' && <CoordPanel coord={coord} />}

@@ -377,6 +377,8 @@ function RecentsPanel({ items, root, busy, isLeased, getBusyAgent, getLeasedBy, 
 
 // ─── container ───────────────────────────────────────────────────────────────
 
+const FOLLOW_ACTIVE_KEY = 'ft-follow-active'
+
 interface Props {
   root: string | null
   busy: Set<string>
@@ -388,15 +390,17 @@ interface Props {
   getBusyAgent: (path: string) => string | null
   onOpenFile: (path: string) => void
   keyDocs?: KeyDoc[]
+  focusPath?: string | null
 }
 
-export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeased, getLeasedBy, getBusyAgent, onOpenFile, keyDocs }: Props): JSX.Element {
+export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeased, getLeasedBy, getBusyAgent, onOpenFile, keyDocs, focusPath }: Props): JSX.Element {
   const [top, setTop] = useState<FileNode[] | null>(null)
   const [query, setQuery] = useState('')
   const [useRegex, setUseRegex] = useState(false)
   const [results, setResults] = useState<FileNode[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [revealPath, setRevealPath] = useState<string | null>(null)
+  const [followActive, setFollowActive] = useState<boolean>(() => localStorage.getItem(FOLLOW_ACTIVE_KEY) !== 'false')
   const [regexError, setRegexError] = useState(false)
   // Paths of directories the user has collapsed in the search-results tree. Owned here (not in
   // each SearchNode) so a collapse survives re-renders triggered by streaming agent activity.
@@ -439,6 +443,10 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
     const t = setTimeout(() => setRevealPath(null), 2000)
     return () => clearTimeout(t)
   }, [revealPath])
+
+  useEffect(() => {
+    if (followActive && focusPath) setRevealPath(focusPath)
+  }, [focusPath, followActive])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -534,6 +542,13 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
     localStorage.setItem(RECENTS_OPEN_KEY, String(next))
   }
 
+  function toggleFollowActive(): void {
+    const next = !followActive
+    setFollowActive(next)
+    localStorage.setItem(FOLLOW_ACTIVE_KEY, String(next))
+    if (next && focusPath) setRevealPath(focusPath)
+  }
+
   return (
     <div className="file-tree-wrap" ref={wrapRef}>
       <div className="file-search-bar">
@@ -545,6 +560,13 @@ export function FileTree({ root, busy, recent, recentOrdered, gitChanged, isLeas
           spellCheck={false}
         />
         {searching && <span className="file-search-spinner" />}
+        <button
+          className={`file-search-follow${followActive ? ' on' : ''}`}
+          onClick={toggleFollowActive}
+          title={followActive ? 'Following active file — click to disable' : 'Click to follow active file in tree'}
+        >
+          ◎
+        </button>
         <button
           className={`file-search-regex${useRegex ? ' on' : ''}`}
           onClick={() => setUseRegex((v) => !v)}
