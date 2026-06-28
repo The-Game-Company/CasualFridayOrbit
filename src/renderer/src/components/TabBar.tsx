@@ -108,6 +108,12 @@ export function TabBar({
             className={`tab ${t.id === activeTabId ? 'active' : ''} ${count > 1 ? 'split' : ''} ${paused ? 'paused' : ''} ${skill ? 'skill' : ''} ${canDrop && dropTab === t.id ? 'drop-target' : ''} ${dragTabId === t.id ? 'dragging' : ''} ${reorderEdge ? `reorder-${reorderEdge}` : ''}`}
             draggable
             onClick={() => onSelect(t.id)}
+            onAuxClick={(e) => {
+              if (e.button === 1) {
+                e.preventDefault()
+                onClose(t.id)
+              }
+            }}
             onDragStart={(e) => {
               e.dataTransfer.setData('text/plain', t.id)
               e.dataTransfer.effectAllowed = 'move'
