@@ -139,6 +139,8 @@ function Node({ node, depth, busy, recent, gitChanged, isLeased, onOpenFile, rev
           ref={isTarget ? selfRef : undefined}
           className={`ctx-row dir${isTarget ? ' ft-reveal-target' : ''}`}
           style={pad}
+          draggable
+          onDragStart={(e) => startPathDrag(e, node.path)}
           onClick={toggle}
           onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
         >
