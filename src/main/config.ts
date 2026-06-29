@@ -31,6 +31,7 @@ export function loadConfig(): AppConfig {
     notifySound: false,
     notifyOnDone: true,
     notifyOnWait: true,
+    smartPaste: true,
     delegateEnabled: false,
     delegateModels: { openai: 'gpt-5', gemini: 'gemini-2.5-pro', composer: 'composer-2' }
   }

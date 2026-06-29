@@ -141,6 +141,20 @@ export function SettingsModal({ config, onChange, onClose }: Props): JSX.Element
                 While the session you're watching is busy, jump to another window the moment it
                 finishes and wants your input.
               </div>
+
+              <label className="field-check">
+                <input
+                  type="checkbox"
+                  checked={config.smartPaste ?? true}
+                  onChange={(e) => onChange({ ...config, smartPaste: e.target.checked })}
+                />
+                <span>Smart paste images &amp; large text</span>
+              </label>
+              <div className="field-hint">
+                On Ctrl+V, an image on the clipboard — or, in a chat, a very large text blob — is
+                saved to a file and its path is typed in, so Claude can read it. Turn off for a
+                plain text paste (clipboard images are then ignored).
+              </div>
             </>
           )}
 

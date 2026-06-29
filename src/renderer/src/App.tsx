@@ -2148,6 +2148,7 @@ export default function App(): JSX.Element {
                       active={s.id === activeId}
                       fontSize={config.fontSize}
                       theme={config.theme}
+                      smartPaste={config.smartPaste ?? true}
                       lastPrompt={s.lastPrompt}
                       lastPromptTs={s.lastPromptTs}
                       quickPrompts={projectInfo.prompts}

@@ -48,6 +48,9 @@ interface Props {
   active: boolean
   fontSize: number
   theme: ThemeName
+  /** smart paste: save clipboard images (and huge claude pastes) to a file and type the path
+   *  instead of pasting inline. Off = plain text paste, clipboard image bytes ignored. */
+  smartPaste: boolean
   /** most recent user prompt — shown pinned at the top once it scrolls out of view */
   lastPrompt?: string
   /** bumps each time a new prompt is submitted; triggers a fresh scroll marker */
@@ -89,6 +92,9 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
   // read at spawn time, so a lazy launch picks up the effort restored/known by the time it fires
   const effortRef = useRef(props.effort)
   effortRef.current = props.effort
+  // read inside the once-only key handler, so toggling Settings takes effect without a restart
+  const smartPasteRef = useRef(props.smartPaste)
+  smartPasteRef.current = props.smartPaste
 
   // Decide which prompt the pinned bar should show.
   //  • With markers (prompts submitted during this live session) we know each prompt's line, so
@@ -270,11 +276,14 @@ export const Terminal = forwardRef<TermHandle, Props>(function Terminal(props, r
         (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'v') || (e.shiftKey && e.key === 'Insert')
       if (isPaste) {
         e.preventDefault()
-        // claude sessions get the huge-text fallback: past ~100KB the clipboard is saved to a
-        // temp file and the path is typed in (like images) — megabytes through bracketed
-        // paste wedge the CLI. Plain shells always get the real text.
-        window.orbit.clipboardRead(props.kind === 'claude').then(({ text, imagePath, textPath }) => {
-          const filePath = imagePath ?? textPath
+        // Smart paste (Settings, default on): an image on the clipboard — or, for claude, a huge
+        // text blob past ~100KB — is saved to a temp file and the path is typed in (claude reads
+        // images/large pastes by path; megabytes through bracketed paste wedge the CLI). With it
+        // off, Ctrl+V is a plain text paste and clipboard image bytes are ignored (a terminal
+        // can't carry them). The ref is read live, so the toggle applies without a restart.
+        const smart = smartPasteRef.current
+        window.orbit.clipboardRead(smart && props.kind === 'claude').then(({ text, imagePath, textPath }) => {
+          const filePath = smart ? (imagePath ?? textPath) : null
           if (filePath) window.orbit.sessionInput(props.sessionId, ` ${filePath} `)
           else if (text) term.paste(text)
         })

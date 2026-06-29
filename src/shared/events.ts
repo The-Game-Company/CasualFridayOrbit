@@ -242,6 +242,10 @@ export interface AppConfig {
   recentsPerProject?: boolean
   /** remember and restore open editor tabs separately per project */
   openFilesPerProject?: boolean
+  /** smart paste (default on): on Ctrl+V, save a clipboard image — or, for claude chats, a
+   *  huge text blob — to a temp file and type its path in (claude reads images/large pastes by
+   *  path). Off = Ctrl+V is a plain text paste and clipboard image bytes are ignored. */
+  smartPaste?: boolean
   /** master switch for the "delegate a turn to a non-Claude model" feature. Off = the per-chat
    *  model dropdown is hidden and the feature is entirely inert. */
   delegateEnabled?: boolean
